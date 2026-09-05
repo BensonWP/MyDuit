@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../db/database.dart';
 import '../providers/database_provider.dart';
+import '../utils/currency.dart';
 import '../utils/app_icons.dart';
+import '../theme/app_theme.dart';
 import 'account_form_screen.dart';
 
 class AccountsScreen extends ConsumerWidget {
@@ -10,54 +14,148 @@ class AccountsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
+    final reducedMotion = MediaQuery.of(context).disableAnimations;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Wallet')),
       body: accounts.isEmpty
-          ? const Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.account_balance_wallet, size: 64, color: Colors.grey),
-                  SizedBox(height: 16),
-                  Text('Belum ada wallet', style: TextStyle(color: Colors.grey)),
-                ],
+          ? _EmptyWallets(reducedMotion: reducedMotion)
+          : GridView.builder(
+              padding: const EdgeInsets.all(D.s4),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                mainAxisSpacing: D.s3,
+                crossAxisSpacing: D.s3,
+                childAspectRatio: 1.45,
               ),
-            )
-          : ListView.builder(
-              padding: const EdgeInsets.all(16),
               itemCount: accounts.length,
-              itemBuilder: (ctx, i) {
-                final account = accounts[i];
-                final color = hexToColor(account.color);
-
-                return Card(
-                  margin: const EdgeInsets.only(bottom: 12),
-                  child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: color.withValues(alpha: 0.15),
-                      child: Icon(getAccountIcon(account.type), color: color),
-                    ),
-                    title: Text(account.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    subtitle: Text(account.type.toUpperCase(), style: const TextStyle(fontSize: 12)),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => AccountFormScreen(accountId: account.id),
-                      ),
-                    ),
-                  ),
-                );
-              },
+              itemBuilder: (ctx, i) => _WalletCard(
+                account: accounts[i],
+                index: i,
+                animate: !reducedMotion,
+              ),
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: () => Navigator.push(
           context,
           MaterialPageRoute(builder: (_) => const AccountFormScreen()),
         ),
-        child: const Icon(Icons.add),
+        child: const Icon(Icons.add_rounded),
       ),
+    );
+  }
+}
+
+class _WalletCard extends ConsumerWidget {
+  const _WalletCard({
+    required this.account,
+    required this.index,
+    required this.animate,
+  });
+
+  final Account account;
+  final int index;
+  final bool animate;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final balance = ref.watch(accountBalanceProvider(account.id)).valueOrNull ?? 0;
+    final color = hexToColor(account.color);
+
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+            builder: (_) => AccountFormScreen(accountId: account.id)),
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(D.s4),
+        decoration: BoxDecoration(
+          color: D.card,
+          borderRadius: BorderRadius.circular(D.rMd),
+          border: Border.all(color: D.line),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(D.rSm + 2),
+              ),
+              child: Icon(getAccountIcon(account.type), color: color, size: 20),
+            ),
+            const Spacer(),
+            Text(account.name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(
+              formatRupiah(balance),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                  fontSize: 16.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3),
+            ),
+          ],
+        ),
+      )
+          .animate(target: animate ? 1 : 0)
+          .fade(duration: 300.ms, delay: (50 * index).clamp(0, 400).ms)
+          .slideY(
+            begin: 0.1,
+            end: 0,
+            duration: 300.ms,
+            delay: (50 * index).clamp(0, 400).ms,
+            curve: Curves.easeOutCubic,
+          ),
+    );
+  }
+}
+
+class _EmptyWallets extends StatelessWidget {
+  const _EmptyWallets({required this.reducedMotion});
+  final bool reducedMotion;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(D.s8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.account_balance_wallet_rounded,
+                size: 48, color: D.inkMuted),
+            const SizedBox(height: D.s4),
+            const Text('Belum ada wallet',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const SizedBox(height: D.s2),
+            const Text(
+              'Tambahkan wallet pertama — Cash, Bank, atau e-wallet — agar saldo bisa terlacak.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: D.inkMuted, height: 1.5),
+            ),
+            const SizedBox(height: D.s6),
+            FilledButton(
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AccountFormScreen()),
+              ),
+              child: const Text('Tambah Wallet'),
+            ),
+          ],
+        ),
+      )
+          .animate(target: reducedMotion ? 0 : 1)
+          .fade(duration: 400.ms)
+          .slideY(begin: 0.1, end: 0, duration: 400.ms, curve: Curves.easeOutCubic),
     );
   }
 }

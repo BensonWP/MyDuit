@@ -5,6 +5,8 @@ import 'package:intl/intl.dart';
 import 'screens/home_screen.dart';
 import 'screens/accounts_screen.dart';
 import 'screens/bills_screen.dart';
+import 'screens/transaction_form_screen.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,11 +23,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'MyDuit',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF2196F3),
-        useMaterial3: true,
-        brightness: Brightness.light,
-      ),
+      theme: buildTheme(),
       home: const MainShell(),
     );
   }
@@ -42,22 +40,60 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
 
   static const _screens = [
-    HomeScreen(),
-    AccountsScreen(),
-    BillsScreen(),
+    KeyedSubtree(key: ValueKey('home'), child: HomeScreen()),
+    KeyedSubtree(key: ValueKey('accounts'), child: AccountsScreen()),
+    KeyedSubtree(key: ValueKey('bills'), child: BillsScreen()),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final showFab = _index != 2; // tagihan punya FAB sendiri
+
     return Scaffold(
-      body: _screens[_index],
+      body: AnimatedSwitcher(
+        duration: MediaQuery.of(context).disableAnimations
+            ? Duration.zero
+            : const Duration(milliseconds: 250),
+        switchInCurve: Curves.easeOutCubic,
+        switchOutCurve: Curves.easeInCubic,
+        transitionBuilder: (child, anim) => FadeTransition(
+          opacity: anim,
+          child: SlideTransition(
+            position: Tween(
+              begin: const Offset(0, 0.015),
+              end: Offset.zero,
+            ).animate(anim),
+            child: child,
+          ),
+        ),
+        child: _screens[_index],
+      ),
+      floatingActionButton: showFab
+          ? FloatingActionButton.extended(
+              onPressed: () => TransactionForm.showAddSheet(context),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Tambah'),
+            )
+          : null,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.home), label: 'Beranda'),
-          NavigationDestination(icon: Icon(Icons.account_balance_wallet), label: 'Wallet'),
-          NavigationDestination(icon: Icon(Icons.receipt_long), label: 'Tagihan'),
+          NavigationDestination(
+            icon: Icon(Icons.home_outlined),
+            selectedIcon: Icon(Icons.home_rounded),
+            label: 'Beranda',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.account_balance_wallet_outlined),
+            selectedIcon: Icon(Icons.account_balance_wallet_rounded),
+            label: 'Wallet',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.receipt_long_outlined),
+            selectedIcon: Icon(Icons.receipt_long_rounded),
+            label: 'Tagihan',
+          ),
         ],
       ),
     );

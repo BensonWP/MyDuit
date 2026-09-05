@@ -6,19 +6,33 @@ import '../db/database.dart';
 import '../providers/database_provider.dart';
 import '../utils/currency.dart';
 import '../utils/app_icons.dart';
+import '../theme/app_theme.dart';
 
-class TransactionFormScreen extends ConsumerStatefulWidget {
-  const TransactionFormScreen({super.key, this.initialAccountId, this.initialType, this.existing});
+/// Form transaksi.
+/// - Tambah: tampil sebagai modal bottom sheet lewat [showAddSheet].
+/// - Edit: tampil sebagai halaman penuh lewat [TransactionForm.existing].
+class TransactionForm extends ConsumerStatefulWidget {
+  const TransactionForm({super.key, this.existing, this.inSheet = false});
 
-  final String? initialAccountId;
-  final String? initialType;
   final Transaction? existing;
+  final bool inSheet;
+
+  static Future<void> showAddSheet(BuildContext context) {
+    return showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: const TransactionForm(inSheet: true),
+      ),
+    );
+  }
 
   @override
-  ConsumerState<TransactionFormScreen> createState() => _TransactionFormScreenState();
+  ConsumerState<TransactionForm> createState() => _TransactionFormState();
 }
 
-class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
+class _TransactionFormState extends ConsumerState<TransactionForm> {
   final _formKey = GlobalKey<FormState>();
   final _amountController = TextEditingController();
   final _noteController = TextEditingController();
@@ -34,8 +48,8 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.existing != null) {
-      final tx = widget.existing!;
+    final tx = widget.existing;
+    if (tx != null) {
       _type = tx.type;
       _accountId = tx.accountId;
       _toAccountId = tx.toAccountId;
@@ -43,9 +57,6 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       _date = DateTime.parse(tx.date);
       _amountController.text = tx.amount.toString();
       _noteController.text = tx.note;
-    } else {
-      _type = widget.initialType ?? 'expense';
-      _accountId = widget.initialAccountId;
     }
   }
 
@@ -59,22 +70,17 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_accountId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pilih wallet terlebih dahulu')),
-      );
+      _snack('Pilih wallet terlebih dahulu');
       return;
     }
     if (_type == 'transfer' && (_toAccountId == null || _toAccountId == _accountId)) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Wallet asal dan tujuan harus berbeda')),
-      );
+      _snack('Wallet asal dan tujuan harus berbeda');
       return;
     }
 
     setState(() => _isLoading = true);
     final db = ref.read(dbProvider);
     final amount = int.tryParse(parseCurrency(_amountController.text)) ?? 0;
-
     final id = _isEditing ? widget.existing!.id : const Uuid().v4();
 
     final entry = TransactionsCompanion.insert(
@@ -101,13 +107,14 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Hapus Transaksi?'),
-        content: const Text('Tindakan ini tidak bisa dibatalkan.'),
+        title: const Text('Hapus transaksi?'),
+        content: const Text('Transaksi dihapus permanen dan saldo dihitung ulang.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            style: TextButton.styleFrom(foregroundColor: D.expense),
             child: const Text('Hapus'),
           ),
         ],
@@ -119,20 +126,156 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
     }
   }
 
+  void _snack(String msg) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+
   @override
   Widget build(BuildContext context) {
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
     final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
+    final filteredCategories =
+        categories.where((c) => c.type == _type).toList();
 
-    final filteredCategories = categories.where((c) => c.type == _type).toList();
+    final fields = <Widget>[
+      _TypeSelector(
+        selected: _type,
+        onChanged: (v) => setState(() {
+          _type = v;
+          if (v == 'transfer') _categoryId = null;
+        }),
+      ),
+      const SizedBox(height: D.s4),
+      TextFormField(
+        controller: _amountController,
+        decoration: const InputDecoration(
+          labelText: 'Jumlah',
+          prefixText: 'Rp ',
+          hintStyle: TextStyle(color: D.inkMuted),
+        ),
+        keyboardType: TextInputType.number,
+        inputFormatters: [CurrencyInputFormatter()],
+        autofocus: !widget.inSheet && !_isEditing,
+        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+        validator: (v) {
+          if (v == null || v.isEmpty) return 'Wajib diisi';
+          final n = int.tryParse(parseCurrency(v));
+          if (n == null || n <= 0) return 'Harus lebih dari 0';
+          return null;
+        },
+      ),
+      const SizedBox(height: D.s3),
+      DropdownButtonFormField<String>(
+        value: _accountId,
+        decoration: const InputDecoration(labelText: 'Wallet'),
+        items: accounts
+            .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
+            .toList(),
+        onChanged: (v) => setState(() => _accountId = v),
+      ),
+      if (_type == 'transfer') ...[
+        const SizedBox(height: D.s3),
+        DropdownButtonFormField<String>(
+          value: _toAccountId,
+          decoration: const InputDecoration(labelText: 'Ke Wallet'),
+          items: accounts
+              .where((a) => a.id != _accountId)
+              .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
+              .toList(),
+          onChanged: (v) => setState(() => _toAccountId = v),
+        ),
+      ],
+      if (_type != 'transfer') ...[
+        const SizedBox(height: D.s3),
+        DropdownButtonFormField<String>(
+          value: _categoryId,
+          decoration: const InputDecoration(labelText: 'Kategori'),
+          items: filteredCategories
+              .map((c) => DropdownMenuItem(
+                    value: c.id,
+                    child: Row(
+                      children: [
+                        Icon(getIcon(c.icon), size: 18, color: D.inkMuted),
+                        const SizedBox(width: D.s2),
+                        Text(c.name),
+                      ],
+                    ),
+                  ))
+              .toList(),
+          onChanged: (v) => setState(() => _categoryId = v),
+        ),
+      ],
+      const SizedBox(height: D.s3),
+      TextFormField(
+        controller: _noteController,
+        decoration: const InputDecoration(
+          labelText: 'Catatan (opsional)',
+          hintText: 'Makan siang, bensin…',
+        ),
+      ),
+      const SizedBox(height: D.s2),
+      ListTile(
+        leading: const Icon(Icons.calendar_today_rounded,
+            size: 20, color: D.inkMuted),
+        title: const Text('Tanggal', style: TextStyle(fontSize: 14)),
+        subtitle: Text(formatDate(_date.toIso8601String()),
+            style: const TextStyle(fontSize: 12.5)),
+        contentPadding: EdgeInsets.zero,
+        onTap: () async {
+          final picked = await showDatePicker(
+            context: context,
+            initialDate: _date,
+            firstDate: DateTime(2020),
+            lastDate: DateTime.now(),
+          );
+          if (picked != null) setState(() => _date = picked);
+        },
+      ),
+      const SizedBox(height: D.s2),
+      FilledButton(
+        onPressed: _isLoading ? null : _save,
+        child: _isLoading
+            ? const SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white))
+            : Text(_isEditing ? 'Simpan Perubahan' : 'Simpan'),
+      ),
+    ];
+
+    if (widget.inSheet) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(D.s4, 0, D.s4, D.s4),
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Text(
+                    'Transaksi Baru',
+                    style: Theme.of(context).appBarTheme.titleTextStyle,
+                  ),
+                ),
+                const SizedBox(height: D.s4),
+                ...fields,
+              ],
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isEditing ? 'Edit Transaksi' : 'Tambah Transaksi'),
+        title: Text(_isEditing ? 'Edit Transaksi' : 'Transaksi Baru'),
         actions: _isEditing
             ? [
                 IconButton(
-                  icon: const Icon(Icons.delete_outline, color: Colors.red),
+                  icon: const Icon(Icons.delete_outline_rounded,
+                      color: D.expense),
                   onPressed: _delete,
                 ),
               ]
@@ -141,153 +284,91 @@ class _TransactionFormScreenState extends ConsumerState<TransactionFormScreen> {
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            Row(
-              children: [
-                _typeButton('expense', 'Pengeluaran', Colors.red),
-                const SizedBox(width: 8),
-                _typeButton('income', 'Pemasukan', Colors.green),
-                const SizedBox(width: 8),
-                _typeButton('transfer', 'Transfer', Colors.blue),
-              ],
-            ),
-            const SizedBox(height: 16),
-
-            TextFormField(
-              controller: _amountController,
-              decoration: const InputDecoration(
-                labelText: 'Jumlah',
-                border: OutlineInputBorder(),
-                prefixText: 'Rp ',
-              ),
-              keyboardType: TextInputType.number,
-              inputFormatters: [CurrencyInputFormatter()],
-              validator: (v) {
-                if (v == null || v.isEmpty) return 'Wajib diisi';
-                final n = int.tryParse(parseCurrency(v));
-                if (n == null || n <= 0) return 'Harus lebih dari 0';
-                return null;
-              },
-            ),
-            const SizedBox(height: 16),
-
-            DropdownButtonFormField<String>(
-              value: _accountId,
-              decoration: const InputDecoration(
-                labelText: 'Wallet',
-                border: OutlineInputBorder(),
-              ),
-              items: accounts
-                  .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
-                  .toList(),
-              onChanged: (v) => setState(() => _accountId = v),
-            ),
-            const SizedBox(height: 16),
-
-            if (_type == 'transfer') ...[
-              DropdownButtonFormField<String>(
-                value: _toAccountId,
-                decoration: const InputDecoration(
-                  labelText: 'Ke Wallet',
-                  border: OutlineInputBorder(),
-                ),
-                items: accounts
-                    .where((a) => a.id != _accountId)
-                    .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
-                    .toList(),
-                onChanged: (v) => setState(() => _toAccountId = v),
-              ),
-              const SizedBox(height: 16),
-            ],
-
-            if (_type != 'transfer')
-              DropdownButtonFormField<String>(
-                value: _categoryId,
-                decoration: const InputDecoration(
-                  labelText: 'Kategori',
-                  border: OutlineInputBorder(),
-                ),
-                items: filteredCategories
-                    .map((c) => DropdownMenuItem(
-                          value: c.id,
-                          child: Row(
-                            children: [
-                              Icon(getIcon(c.icon), size: 18),
-                              const SizedBox(width: 8),
-                              Text(c.name),
-                            ],
-                          ),
-                        ))
-                    .toList(),
-                onChanged: (v) => setState(() => _categoryId = v),
-              ),
-            if (_type != 'transfer') const SizedBox(height: 16),
-
-            TextFormField(
-              controller: _noteController,
-              decoration: const InputDecoration(
-                labelText: 'Catatan (opsional)',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            ListTile(
-              leading: const Icon(Icons.calendar_today),
-              title: const Text('Tanggal'),
-              subtitle: Text(formatDate(_date.toIso8601String())),
-              onTap: () async {
-                final picked = await showDatePicker(
-                  context: context,
-                  initialDate: _date,
-                  firstDate: DateTime(2020),
-                  lastDate: DateTime.now(),
-                );
-                if (picked != null) setState(() => _date = picked);
-              },
-              contentPadding: EdgeInsets.zero,
-            ),
-            const SizedBox(height: 24),
-
-            FilledButton(
-              onPressed: _isLoading ? null : _save,
-              child: _isLoading
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                  : Text(_isEditing ? 'Simpan Perubahan' : 'Simpan'),
-            ),
-          ],
+          padding: const EdgeInsets.all(D.s4),
+          children: fields,
         ),
       ),
     );
   }
+}
 
-  Widget _typeButton(String type, String label, Color color) {
-    final selected = _type == type;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () => setState(() => _type = type),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          decoration: BoxDecoration(
-            color: selected ? color.withValues(alpha: 0.2) : Colors.grey.shade100,
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: selected ? color : Colors.transparent,
-              width: 2,
-            ),
-          ),
-          child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontWeight: FontWeight.w600,
-                color: selected ? color : Colors.grey,
+// ── Selector jenis transaksi dengan indikator geser ────────────────
+
+class _TypeSelector extends StatelessWidget {
+  const _TypeSelector({required this.selected, required this.onChanged});
+
+  final String selected;
+  final ValueChanged<String> onChanged;
+
+  static const _options = [
+    ('expense', 'Pengeluaran'),
+    ('income', 'Pemasukan'),
+    ('transfer', 'Transfer'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final reduced = MediaQuery.of(context).disableAnimations;
+    final selectedIdx = _options.indexWhere((o) => o.$1 == selected);
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final w = constraints.maxWidth;
+      const padding = 4.0;
+      final segW = (w - padding * 2) / _options.length;
+
+      return Container(
+        height: 48,
+        decoration: BoxDecoration(
+          color: D.surface,
+          borderRadius: BorderRadius.circular(D.rMd),
+          border: Border.all(color: D.line),
+        ),
+        child: Stack(
+          children: [
+            AnimatedPositioned(
+              duration:
+                  reduced ? Duration.zero : const Duration(milliseconds: 200),
+              curve: Curves.easeOutCubic,
+              left: padding + segW * selectedIdx,
+              top: padding,
+              bottom: padding,
+              width: segW,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: D.cobalt,
+                  borderRadius: BorderRadius.circular(D.rMd - 4),
+                ),
               ),
             ),
-          ),
+            Row(
+              children: _options.map((o) {
+                final isSelected = o.$1 == selected;
+                return Expanded(
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () => onChanged(o.$1),
+                    child: Center(
+                      child: AnimatedDefaultTextStyle(
+                        duration: reduced
+                            ? Duration.zero
+                            : const Duration(milliseconds: 200),
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: isSelected
+                              ? FontWeight.w700
+                              : FontWeight.w500,
+                          color: isSelected ? Colors.white : D.inkMuted,
+                        ),
+                        child: Text(o.$2),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
         ),
-      ),
-    );
+      );
+    });
   }
 }
