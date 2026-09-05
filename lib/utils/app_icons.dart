@@ -23,3 +23,5 @@ const Map<String, IconData> categoryIcons = {
 IconData getIcon(String key) => categoryIcons[key] ?? Icons.category;
 
 IconData getAccountIcon(String key) => accountIcons[key] ?? Icons.account_balance_wallet;
+
+Color hexToColor(String hex) => Color(int.parse('FF${hex.replaceAll('#', '')}', radix: 16));

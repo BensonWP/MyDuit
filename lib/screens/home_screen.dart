@@ -127,7 +127,7 @@ class _AccountCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final balance = ref.watch(accountBalanceProvider(account.id)).valueOrNull ?? 0;
-    final color = Color(int.parse('FF${account.color.substring(1)}', radix: 16));
+    final color = hexToColor(account.color);
 
     return Container(
       width: 160,

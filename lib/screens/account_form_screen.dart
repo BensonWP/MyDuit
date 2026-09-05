@@ -133,7 +133,7 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(
-                            color: Color(int.parse('FF$c.substring(1)', radix: 16)),
+                            color: hexToColor(c),
                             shape: BoxShape.circle,
                             border: Border.all(
                               color: _selectedColor == c ? Colors.white : Colors.transparent,

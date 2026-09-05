@@ -29,7 +29,7 @@ class AccountsScreen extends ConsumerWidget {
               itemCount: accounts.length,
               itemBuilder: (ctx, i) {
                 final account = accounts[i];
-                final color = Color(int.parse('FF${account.color.substring(1)}', radix: 16));
+                final color = hexToColor(account.color);
 
                 return Card(
                   margin: const EdgeInsets.only(bottom: 12),
