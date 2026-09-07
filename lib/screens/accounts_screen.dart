@@ -5,7 +5,10 @@ import '../db/database.dart';
 import '../providers/database_provider.dart';
 import '../utils/currency.dart';
 import '../utils/app_icons.dart';
+import '../utils/wallet_brand.dart';
 import '../theme/app_theme.dart';
+import '../widgets/confirm_dialog.dart';
+import 'account_detail_screen.dart';
 import 'account_form_screen.dart';
 
 class AccountsScreen extends ConsumerWidget {
@@ -57,6 +60,23 @@ class _WalletCard extends ConsumerWidget {
   final int index;
   final bool animate;
 
+  Future<void> _deleteWallet(BuildContext context, WidgetRef ref) async {
+    final db = ref.read(dbProvider);
+    final (txCount, billCount) = await db.accountUsage(account.id);
+    final hasContent = txCount > 0 || billCount > 0;
+
+    final confirmed = await confirmDelete(
+      context,
+      'Hapus ${account.name}?',
+      description: hasContent
+          ? 'Wallet ini punya $txCount transaksi dan $billCount tagihan. '
+              'Semua akan dihapus permanen dan saldo dihitung ulang.'
+          : 'Wallet masih kosong dan bisa dihapus dengan aman.',
+    );
+    if (!confirmed) return;
+    await db.deleteAccountCascade(account.id);
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final balance = ref.watch(accountBalanceProvider(account.id)).valueOrNull ?? 0;
@@ -66,28 +86,21 @@ class _WalletCard extends ConsumerWidget {
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => AccountFormScreen(accountId: account.id)),
+            builder: (_) => AccountDetailScreen(accountId: account.id)),
       ),
+      onLongPress: () => _deleteWallet(context, ref),
       child: Container(
         padding: const EdgeInsets.all(D.s4),
         decoration: BoxDecoration(
           color: D.card,
           borderRadius: BorderRadius.circular(D.rMd),
-          border: Border.all(color: D.line),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(D.rSm + 2),
-              ),
-              child: Icon(getAccountIcon(account.type), color: color, size: 20),
-            ),
-            const Spacer(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              WalletBadge(account: account, size: 38),
+              const Spacer(),
             Text(account.name,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,

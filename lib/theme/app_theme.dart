@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 /// Design tokens — sumber kebenaran: DESIGN.md
 abstract final class D {
@@ -34,6 +33,8 @@ ThemeData buildTheme() {
   final base = ThemeData(
     useMaterial3: true,
     brightness: Brightness.light,
+    // Font lokal (assets/fonts) — tanpa fetch jaringan saat startup.
+    fontFamily: 'PlusJakartaSans',
     colorScheme: ColorScheme.fromSeed(
       seedColor: D.cobalt,
       primary: D.cobalt,
@@ -43,16 +44,13 @@ ThemeData buildTheme() {
 
   return base.copyWith(
     scaffoldBackgroundColor: D.surface,
-    textTheme: GoogleFonts.plusJakartaSansTextTheme(base.textTheme).apply(
-      bodyColor: D.ink,
-      displayColor: D.ink,
-    ),
     appBarTheme: AppBarTheme(
       backgroundColor: D.surface,
       foregroundColor: D.ink,
       elevation: 0,
       centerTitle: false,
-      titleTextStyle: GoogleFonts.plusJakartaSans(
+      titleTextStyle: const TextStyle(
+        fontFamily: 'PlusJakartaSans',
         fontSize: 17,
         fontWeight: FontWeight.w800,
         color: D.ink,
@@ -66,8 +64,7 @@ ThemeData buildTheme() {
       iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
             color: states.contains(WidgetState.selected) ? D.cobalt : D.inkMuted,
           )),
-      labelTextStyle: WidgetStateProperty.resolveWith((states) =>
-          GoogleFonts.plusJakartaSans(
+      labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
             fontSize: 11.5,
             fontWeight: states.contains(WidgetState.selected)
                 ? FontWeight.w700
@@ -88,8 +85,7 @@ ThemeData buildTheme() {
       style: FilledButton.styleFrom(
         backgroundColor: D.cobalt,
         foregroundColor: Colors.white,
-        textStyle: GoogleFonts.plusJakartaSans(
-            fontSize: 15, fontWeight: FontWeight.w700),
+        textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(D.rMd)),
         minimumSize: const Size.fromHeight(52),
       ),
@@ -111,19 +107,19 @@ ThemeData buildTheme() {
         borderRadius: BorderRadius.circular(D.rMd),
         borderSide: const BorderSide(color: D.cobalt, width: 1.6),
       ),
-      labelStyle: GoogleFonts.plusJakartaSans(
+      labelStyle: const TextStyle(
           fontSize: 14, color: D.inkMuted, fontWeight: FontWeight.w500),
     ),
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: D.amber,
       foregroundColor: D.ink,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(D.rLg)),
-      extendedTextStyle:
-          GoogleFonts.plusJakartaSans(fontSize: 15, fontWeight: FontWeight.w800),
+      extendedTextStyle: const TextStyle(
+          fontSize: 15, fontWeight: FontWeight.w800),
     ),
     chipTheme: base.chipTheme.copyWith(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(D.rSm)),
-      labelStyle: GoogleFonts.plusJakartaSans(fontSize: 13),
+      labelStyle: const TextStyle(fontSize: 13),
     ),
     dividerTheme: const DividerThemeData(color: D.line, thickness: 1, space: 1),
     bottomSheetTheme: const BottomSheetThemeData(
@@ -141,7 +137,7 @@ ThemeData buildTheme() {
     ),
     snackBarTheme: SnackBarThemeData(
       backgroundColor: D.ink,
-      contentTextStyle: GoogleFonts.plusJakartaSans(
+      contentTextStyle: const TextStyle(
           fontSize: 13.5, color: Colors.white, fontWeight: FontWeight.w600),
       behavior: SnackBarBehavior.floating,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(D.rMd)),

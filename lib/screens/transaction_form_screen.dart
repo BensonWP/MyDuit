@@ -7,23 +7,30 @@ import '../providers/database_provider.dart';
 import '../utils/currency.dart';
 import '../utils/app_icons.dart';
 import '../theme/app_theme.dart';
+import '../widgets/confirm_dialog.dart';
 
 /// Form transaksi.
 /// - Tambah: tampil sebagai modal bottom sheet lewat [showAddSheet].
 /// - Edit: tampil sebagai halaman penuh lewat [TransactionForm.existing].
 class TransactionForm extends ConsumerStatefulWidget {
-  const TransactionForm({super.key, this.existing, this.inSheet = false});
+  const TransactionForm(
+      {super.key, this.existing, this.inSheet = false, this.initialAccountId});
 
   final Transaction? existing;
   final bool inSheet;
+  final String? initialAccountId;
 
-  static Future<void> showAddSheet(BuildContext context) {
+  static Future<void> showAddSheet(BuildContext context,
+      {String? initialAccountId}) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       builder: (ctx) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
-        child: const TransactionForm(inSheet: true),
+        child: TransactionForm(
+          inSheet: true,
+          initialAccountId: initialAccountId,
+        ),
       ),
     );
   }
@@ -57,6 +64,8 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       _date = DateTime.parse(tx.date);
       _amountController.text = tx.amount.toString();
       _noteController.text = tx.note;
+    } else {
+      _accountId = widget.initialAccountId;
     }
   }
 
@@ -104,26 +113,16 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
   }
 
   Future<void> _delete() async {
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Hapus transaksi?'),
-        content: const Text('Transaksi dihapus permanen dan saldo dihitung ulang.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false), child: const Text('Batal')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            style: TextButton.styleFrom(foregroundColor: D.expense),
-            child: const Text('Hapus'),
-          ),
-        ],
-      ),
+    final confirmed = await confirmDelete(
+      context,
+      'Hapus transaksi ini?',
+      description:
+          'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
     );
-    if (confirm == true && mounted) {
-      await ref.read(dbProvider).deleteTransaction(widget.existing!.id);
-      if (mounted) Navigator.pop(context);
-    }
+    if (!confirmed) return;
+
+    await ref.read(dbProvider).deleteTransaction(widget.existing!.id);
+    if (mounted) Navigator.pop(context);
   }
 
   void _snack(String msg) =>
@@ -139,10 +138,15 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
     final fields = <Widget>[
       _TypeSelector(
         selected: _type,
-        onChanged: (v) => setState(() {
-          _type = v;
-          if (v == 'transfer') _categoryId = null;
-        }),
+        onChanged: (v) {
+          if (v == _type) return;
+          setState(() {
+            _type = v;
+            // Kategori terikat jenis — buang nilai lama agar dropdown valid.
+            _categoryId = null;
+            if (v != 'transfer') _toAccountId = null;
+          });
+        },
       ),
       const SizedBox(height: D.s4),
       TextFormField(
@@ -165,29 +169,38 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       ),
       const SizedBox(height: D.s3),
       DropdownButtonFormField<String>(
-        value: _accountId,
+        // Guard: wallet/kategori yang diarsipkan tak boleh jadi value
+        // dropdown (assert Flutter menuntut value ∈ items).
+        value: accounts.any((a) => a.id == _accountId) ? _accountId : null,
         decoration: const InputDecoration(labelText: 'Wallet'),
         items: accounts
             .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
             .toList(),
-        onChanged: (v) => setState(() => _accountId = v),
+        onChanged: (v) => setState(() {
+          _accountId = v;
+          // Wallet tujuan tak boleh sama dengan asal.
+          if (_toAccountId == v) _toAccountId = null;
+        }),
       ),
       if (_type == 'transfer') ...[
         const SizedBox(height: D.s3),
-        DropdownButtonFormField<String>(
-          value: _toAccountId,
-          decoration: const InputDecoration(labelText: 'Ke Wallet'),
-          items: accounts
-              .where((a) => a.id != _accountId)
-              .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
-              .toList(),
-          onChanged: (v) => setState(() => _toAccountId = v),
-        ),
+      DropdownButtonFormField<String>(
+        value:
+            accounts.any((a) => a.id == _toAccountId) ? _toAccountId : null,
+        decoration: const InputDecoration(labelText: 'Ke Wallet'),
+        items: accounts
+            .where((a) => a.id != _accountId)
+            .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
+            .toList(),
+        onChanged: (v) => setState(() => _toAccountId = v),
+      ),
       ],
       if (_type != 'transfer') ...[
         const SizedBox(height: D.s3),
         DropdownButtonFormField<String>(
-          value: _categoryId,
+          value: filteredCategories.any((c) => c.id == _categoryId)
+              ? _categoryId
+              : null,
           decoration: const InputDecoration(labelText: 'Kategori'),
           items: filteredCategories
               .map((c) => DropdownMenuItem(
