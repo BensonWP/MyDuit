@@ -17,17 +17,17 @@ class LockService {
 
   // ── Keputusan (fungsi murni — di-test) ──────────────────────────
 
-  /// App harus terkunci? Terkunci saat baru dibuka, atau kembali dari
-  /// background setelah lebih dari [graceDuration].
+  /// App harus terkunci? Kunci saat app baru dibuka (belum pernah ke
+  /// background → [backgroundedAt] null), atau kembali dari background
+  /// setelah lebih dari [graceDuration].
   static bool shouldLock({
     required bool enabled,
-    required bool firstResume,
     DateTime? backgroundedAt,
     DateTime? now,
   }) {
     if (!enabled) return false;
     now ??= DateTime.now();
-    if (firstResume || backgroundedAt == null) return true;
+    if (backgroundedAt == null) return true;
     return now.difference(backgroundedAt) > graceDuration;
   }
 

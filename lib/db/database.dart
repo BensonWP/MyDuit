@@ -105,17 +105,17 @@ class Plans extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-/// Baris hasil watchBillProjection — bukan tabel, hanya DTO query.
-class BillProjection {
-  const BillProjection({
-    required this.amount,
-    required this.durationMonths,
+/// Baris hasil watchActiveBillsDetailed — bukan tabel, hanya DTO query.
+/// Tagihan aktif + status bayar dari SATU query: daftar tagihan dan
+/// proyeksi tak bisa lagi melihat data beda frame.
+class ActiveBillRow {
+  const ActiveBillRow({
+    required this.bill,
     required this.paidMonths,
     required this.paidThisMonth,
   });
 
-  final int amount;
-  final int durationMonths; // 0 = berulang selamanya
+  final Bill bill;
   final int paidMonths; // jumlah bulan berbeda yang sudah dibayar
   final bool paidThisMonth;
 }
@@ -213,11 +213,9 @@ class MyDuitDatabase extends _$MyDuitDatabase {
 
   Future<void> updateAccount(AccountsCompanion entry) => into(accounts).insertOnConflictUpdate(entry);
 
-  Future<void> archiveAccount(String id) =>
-      (update(accounts)..where((a) => a.id.equals(id))).write(AccountsCompanion(archived: const Value(true)));
-
   /// Ringkasan pemakaian wallet — untuk dialog konfirmasi hapus.
-  Future<(int txCount, int billCount)> accountUsage(String accountId) async {
+  Future<(int txCount, int billCount, int planCount)> accountUsage(
+      String accountId) async {
     final txRow = await customSelect(
       'SELECT COUNT(*) AS c FROM transactions WHERE account_id = ?1 OR to_account_id = ?1',
       variables: [Variable.withString(accountId)],
@@ -228,11 +226,21 @@ class MyDuitDatabase extends _$MyDuitDatabase {
       variables: [Variable.withString(accountId)],
       readsFrom: {bills},
     ).getSingle();
-    return (txRow.data['c'] as int, billRow.data['c'] as int);
+    final planRow = await customSelect(
+      'SELECT COUNT(*) AS c FROM plans WHERE account_id = ?1',
+      variables: [Variable.withString(accountId)],
+      readsFrom: {plans},
+    ).getSingle();
+    return (
+      txRow.data['c'] as int,
+      billRow.data['c'] as int,
+      planRow.data['c'] as int,
+    );
   }
 
   /// Hapus wallet + seluruh jejaknya (transaksi, transfer, tagihan,
-  /// pembayaran) dalam SATU transaksi DB — urutan FK-aman.
+  /// pembayaran, rencana terikat) dalam SATU transaksi DB —
+  /// urutan FK-aman.
   Future<void> deleteAccountCascade(String accountId) async {
     await transaction(() async {
       await customStatement(
@@ -246,6 +254,11 @@ class MyDuitDatabase extends _$MyDuitDatabase {
         'DELETE FROM transactions WHERE account_id = ?1 OR to_account_id = ?1',
         [accountId],
       );
+      // Rencana terikat wallet ikut terhapus (FK plans.account_id).
+      await customStatement(
+        'DELETE FROM plans WHERE account_id = ?1',
+        [accountId],
+      );
       await (delete(accounts)..where((a) => a.id.equals(accountId))).go();
     });
   }
@@ -255,8 +268,6 @@ class MyDuitDatabase extends _$MyDuitDatabase {
   Future<List<Category>> allCategories() => select(categories).get();
 
   Stream<List<Category>> watchAllCategories() => select(categories).watch();
-
-  Future<void> insertCategory(CategoriesCompanion entry) => into(categories).insert(entry);
 
   // ─── Transaction queries ───────────────────────────────────────
 
@@ -312,8 +323,37 @@ class MyDuitDatabase extends _$MyDuitDatabase {
   Future<void> updateTransaction(TransactionsCompanion entry) =>
       into(transactions).insertOnConflictUpdate(entry);
 
-  Future<void> deleteTransaction(String id) =>
-      (delete(transactions)..where((t) => t.id.equals(id))).go();
+  /// Hapus transaksi permanen secara ATOMIK. Bila transaksi ini adalah
+  /// pembayaran tagihan (bill_payments.transaction_id → FK), baris
+  /// pembayarannya ikut dihapus dan cicilan yang lunas karena pembayaran
+  /// tsb diaktifkan kembali. Tanpa ini, FK constraint gagal → exception.
+  Future<void> deleteTransactionCascade(String id) async {
+    await transaction(() async {
+      final payments = await (select(billPayments)
+            ..where((bp) => bp.transactionId.equals(id)))
+          .get();
+      final billIds = payments.map((p) => p.billId).toSet();
+
+      if (payments.isNotEmpty) {
+        await (delete(billPayments)
+              ..where((bp) => bp.transactionId.equals(id)))
+            .go();
+        for (final billId in billIds) {
+          final bill = await (select(bills)
+                ..where((b) => b.id.equals(billId)))
+              .getSingleOrNull();
+          if (bill != null && bill.completed) {
+            await (update(bills)..where((b) => b.id.equals(billId))).write(
+              const BillsCompanion(
+                  active: Value(true), completed: Value(false)),
+            );
+          }
+        }
+      }
+
+      await (delete(transactions)..where((t) => t.id.equals(id))).go();
+    });
+  }
 
   Future<int> accountBalance(String accountId) async {
     final account = await (select(accounts)..where((a) => a.id.equals(accountId))).getSingleOrNull();
@@ -376,8 +416,33 @@ class MyDuitDatabase extends _$MyDuitDatabase {
 
   // ─── Bill queries ──────────────────────────────────────────────
 
-  Stream<List<Bill>> watchActiveBills() =>
-      (select(bills)..where((b) => b.active.equals(true))..orderBy([(b) => OrderingTerm.asc(b.dueDay)])).watch();
+  /// Tagihan aktif + status bayar bulan berjalan dalam SATU query.
+  /// Urut due_day asc — urutan ini dipakai daftar Tagihan & hero Beranda.
+  /// Month-key dihitung di Dart, bukan strftime('now','localtime'), karena
+  /// dukungan timezone SQLite tidak dijamin di semua build.
+  Stream<List<ActiveBillRow>> watchActiveBillsDetailed() {
+    final monthKey = DateTime.now().toIso8601String().substring(0, 7);
+    return customSelect(
+      '''
+      SELECT b.*,
+             COUNT(DISTINCT substr(p.paid_at, 1, 7)) AS paidMonths,
+             MAX(CASE WHEN substr(p.paid_at, 1, 7) = ?1 THEN 1 ELSE 0 END) AS paidNow
+      FROM bills b
+      LEFT JOIN bill_payments p ON p.bill_id = b.id
+      WHERE b.active = 1
+      GROUP BY b.id
+      ORDER BY b.due_day ASC
+      ''',
+      variables: [Variable.withString(monthKey)],
+      readsFrom: {bills, billPayments},
+    ).watch().map((rows) => rows
+        .map((r) => ActiveBillRow(
+              bill: bills.map(r.data),
+              paidMonths: r.read<int>('paidMonths'),
+              paidThisMonth: r.read<int>('paidNow') == 1,
+            ))
+        .toList());
+  }
 
   /// Tagihan cicilan yang sudah lunas — dipakai untuk section histori.
   /// Nonaktif manual tetap tidak muncul (perilaku lama).
@@ -386,58 +451,6 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             ..where((b) => b.active.equals(false) & b.completed.equals(true))
             ..orderBy([(b) => OrderingTerm.desc(b.createdAt)]))
           .watch();
-
-  /// Total tagihan aktif yang belum dibayar pada bulan berjalan.
-  /// Bulan dibandingkan sebagai prefix 'YYYY-MM' dari paidAt (ISO lokal) —
-  /// sama persis dengan logika paidThisMonth. Month-key dihitung di Dart,
-  /// bukan strftime('now','localtime'), karena dukungan timezone SQLite
-  /// tidak dijamin di semua build (mengembalikan NULL → filter bocor).
-  Stream<int> watchUnpaidBillsTotalThisMonth() {
-    final monthKey = DateTime.now().toIso8601String().substring(0, 7);
-    return customSelect(
-      '''
-      SELECT COALESCE(SUM(b.amount), 0) AS total
-      FROM bills b
-      WHERE b.active = 1
-        AND NOT EXISTS (
-          SELECT 1 FROM bill_payments p
-          WHERE p.bill_id = b.id
-            AND substr(p.paid_at, 1, 7) = ?1
-        )
-      ''',
-      variables: [Variable.withString(monthKey)],
-      readsFrom: {bills, billPayments},
-    ).watchSingle().map((row) => row.data['total'] as int);
-  }
-
-  /// Bahan proyeksi bulanan, per tagihan aktif: nominal, lama cicilan
-  /// (0 = selamanya), jumlah bulan berbeda yang sudah dibayar, dan
-  /// status sudah dibayar bulan berjalan. Month-key dari Dart (lihat
-  /// watchUnpaidBillsTotalThisMonth untuk alasannya).
-  Stream<List<BillProjection>> watchBillProjection() {
-    final monthKey = DateTime.now().toIso8601String().substring(0, 7);
-    return customSelect(
-      '''
-      SELECT b.amount AS amount,
-             b.duration_months AS durationMonths,
-             COUNT(DISTINCT substr(p.paid_at, 1, 7)) AS paidMonths,
-             MAX(CASE WHEN substr(p.paid_at, 1, 7) = ?1 THEN 1 ELSE 0 END) AS paidNow
-      FROM bills b
-      LEFT JOIN bill_payments p ON p.bill_id = b.id
-      WHERE b.active = 1
-      GROUP BY b.id
-      ''',
-      variables: [Variable.withString(monthKey)],
-      readsFrom: {bills, billPayments},
-    ).watch().map((rows) => rows
-        .map((r) => BillProjection(
-              amount: r.read<int>('amount'),
-              durationMonths: r.read<int>('durationMonths'),
-              paidMonths: r.read<int>('paidMonths'),
-              paidThisMonth: r.read<int>('paidNow') == 1,
-            ))
-        .toList());
-  }
 
   Future<void> insertBill(BillsCompanion entry) => into(bills).insert(entry);
 
@@ -501,45 +514,6 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             ..where((bp) => bp.billId.equals(billId))
             ..orderBy([(bp) => OrderingTerm.desc(bp.paidAt)]))
           .watch();
-
-  // ─── Budget queries ────────────────────────────────────────────
-
-  /// Anggaran aktif + info kategorinya (join).
-  Stream<List<({String id, String categoryId, String categoryName, String categoryIcon, int monthlyAmount})>>
-      watchBudgets() {
-    final query = select(budgets).join([
-      innerJoin(categories, categories.id.equalsExp(budgets.categoryId)),
-    ]);
-    return query.watch().map((rows) => rows
-        .map((r) => (
-              id: r.readTable(budgets).id,
-              categoryId: r.readTable(budgets).categoryId,
-              categoryName: r.readTable(categories).name,
-              categoryIcon: r.readTable(categories).icon,
-              monthlyAmount: r.readTable(budgets).monthlyAmount,
-            ))
-        .toList());
-  }
-
-  /// Set anggaran kategori (upsert). amount <= 0 → hapus anggaran.
-  Future<void> setBudget(String categoryId, int amount) async {
-    final existing = await (select(budgets)
-          ..where((b) => b.categoryId.equals(categoryId)))
-        .getSingleOrNull();
-    if (existing == null) {
-      if (amount <= 0) return;
-      await into(budgets).insert(BudgetsCompanion.insert(
-        id: const Uuid().v4(),
-        categoryId: categoryId,
-        monthlyAmount: amount,
-      ));
-    } else if (amount <= 0) {
-      await (delete(budgets)..where((b) => b.id.equals(existing.id))).go();
-    } else {
-      await (update(budgets)..where((b) => b.id.equals(existing.id)))
-          .write(BudgetsCompanion(monthlyAmount: Value(amount)));
-    }
-  }
 
   // ─── Plan queries ──────────────────────────────────────────────
 

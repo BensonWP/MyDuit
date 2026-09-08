@@ -1,6 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../db/database.dart';
 
+/// Satu rangkaian pengeluaran & pemasukan (list sejajar, indeks = periode).
+typedef MonthFlow = ({List<int> expense, List<int> income});
+
 final dbProvider = Provider<MyDuitDatabase>((ref) {
   final db = MyDuitDatabase();
   ref.onDispose(() => db.close());
@@ -59,7 +62,7 @@ class HistoryFilter {
 }
 
 final historyProvider =
-    StreamProvider.family<List<Transaction>, HistoryFilter>((ref, filter) {
+    StreamProvider.autoDispose.family<List<Transaction>, HistoryFilter>((ref, filter) {
   return ref.watch(dbProvider).watchTransactionsFiltered(
         type: filter.type,
         accountId: filter.accountId,
@@ -72,17 +75,25 @@ final historyProvider =
 
 // ─── Bill providers ───────────────────────────────────────────────
 
-final activeBillsStreamProvider = StreamProvider<List<Bill>>((ref) {
-  return ref.watch(dbProvider).watchActiveBills();
+/// Satu-satunya sumber data tagihan aktif. Daftar tagihan dan proyeksi
+/// di-derive dari stream yang sama → tak bisa lagi beda frame antar konsumen.
+final activeBillsDetailedProvider = StreamProvider<List<ActiveBillRow>>(
+    (ref) => ref.watch(dbProvider).watchActiveBillsDetailed());
+
+final activeBillsProvider = Provider<List<Bill>>((ref) {
+  final rows = ref.watch(activeBillsDetailedProvider).valueOrNull ?? const [];
+  return [for (final r in rows) r.bill];
 });
 
 final completedBillsStreamProvider = StreamProvider<List<Bill>>((ref) {
   return ref.watch(dbProvider).watchCompletedBills();
 });
 
-/// Total tagihan aktif yang belum dibayar bulan ini (untuk baris Hero).
-final unpaidBillsTotalProvider = StreamProvider<int>((ref) {
-  return ref.watch(dbProvider).watchUnpaidBillsTotalThisMonth();
+/// Total tagihan aktif yang belum dibayar bulan ini (baris Hero Beranda) —
+/// derive dari stream tagihan aktif, bukan query kedua.
+final unpaidBillsTotalProvider = Provider<int>((ref) {
+  final rows = ref.watch(activeBillsDetailedProvider).valueOrNull ?? const [];
+  return billsForMonth(rows, 0).total;
 });
 
 // ─── Plan providers ───────────────────────────────────────────────
@@ -94,40 +105,48 @@ final plansStreamProvider = StreamProvider<List<Plan>>((ref) {
 
 // ─── Proyeksi saldo (Beranda) ──────────────────────────────────────
 
-final billProjectionProvider = StreamProvider<List<BillProjection>>((ref) {
-  return ref.watch(dbProvider).watchBillProjection();
-});
-
 /// Toggle kartu Proyeksi: ikut kurangkan total Rencana.
 final includePlansInProjectionProvider = StateProvider<bool>((_) => false);
 
-/// Tagihan yang jatuh pada bulan ke-m dari sekarang (m=0 bulan ini).
+/// Bulan yang sedang dibuka di kartu hero Beranda (0 = bulan ini,
+/// 1–12 = proyeksi). Bagian Tagihan ikut mengikuti nilai ini.
+final homeMonthOffsetProvider = StateProvider<int>((_) => 0);
+
+/// Apakah tagihan ini jatuh pada bulan ke-m dari sekarang.
 /// Cicilan (durationMonths>0) hanya dihitung selama sisa bulaninya ada;
 /// bulan ini hanya dihitung bila belum dibayar.
-({int total, int count}) billsForMonth(List<BillProjection> entries, int m) {
+bool billHitsMonth(ActiveBillRow e, int m) {
+  if (m == 0) return !e.paidThisMonth;
+  if (e.bill.durationMonths == 0) return true; // langganan tanpa batas
+  final remaining = e.bill.durationMonths - e.paidMonths -
+      (e.paidThisMonth ? 0 : 1);
+  return remaining >= m;
+}
+
+/// Tagihan yang jatuh pada bulan ke-m dari sekarang (m=0 bulan ini).
+({int total, int count}) billsForMonth(List<ActiveBillRow> entries, int m) {
   var total = 0, count = 0;
   for (final e in entries) {
-    var hit = false;
-    if (m == 0) {
-      hit = !e.paidThisMonth;
-    } else if (e.durationMonths == 0) {
-      hit = true; // langganan tanpa batas
-    } else {
-      final remaining =
-          e.durationMonths - e.paidMonths - (e.paidThisMonth ? 0 : 1);
-      hit = remaining >= m;
-    }
-    if (hit) {
-      total += e.amount;
+    if (billHitsMonth(e, m)) {
+      total += e.bill.amount;
       count++;
     }
   }
   return (total: total, count: count);
 }
 
+/// Tagihan untuk bulan terpilih di hero Beranda (urut jatuh tempo,
+/// mengikuti urutan watchActiveBillsDetailed). Predikat sama dengan
+/// billsForMonth — satu stream sumber, jadi selalu cocok dengan Proyeksi.
+final monthBillsProvider =
+    Provider.autoDispose.family<List<Bill>, int>((ref, m) {
+  final rows = ref.watch(activeBillsDetailedProvider).valueOrNull ?? const [];
+  return [for (final r in rows) if (billHitsMonth(r, m)) r.bill];
+});
+
 /// Akumulasi tagihan dari bulan ini s/d bulan ke-m (kumulatif — membayar
 /// bulan ini mengurangi saldo bulan depan).
-int billsThroughMonth(List<BillProjection> entries, int m) {
+int billsThroughMonth(List<ActiveBillRow> entries, int m) {
   var t = 0;
   for (var j = 0; j <= m; j++) {
     t += billsForMonth(entries, j).total;
@@ -190,23 +209,30 @@ final monthTransactionsProvider = StreamProvider.autoDispose
       .watchTransactionsByDateRange(range.from, range.to);
 });
 
-/// Bucket pengeluaran 6 bulan yang berakhir di [anchor] (indeks 5).
-/// Fungsi murni — transaksi sudah difilter ke rentang yang tepat.
-List<int> monthTrendBuckets(List<Transaction> txs, DateTime anchor) {
+/// Bucket pengeluaran & pemasukan 6 bulan yang berakhir di [anchor]
+/// (indeks 5). Fungsi murni — transaksi sudah difilter ke rentang tepat.
+/// Transfer diabaikan (bukan arus kas masuk/keluar riil).
+MonthFlow monthTrendBuckets(List<Transaction> txs, DateTime anchor) {
   final first = DateTime(anchor.year, anchor.month - 5);
-  final months = List.filled(6, 0);
+  final expense = List.filled(6, 0);
+  final income = List.filled(6, 0);
   for (final tx in txs) {
-    if (tx.type != 'expense') continue;
+    final target = tx.type == 'expense'
+        ? expense
+        : tx.type == 'income'
+            ? income
+            : null;
+    if (target == null) continue;
     final d = DateTime.parse(tx.date);
     final idx = (d.year - first.year) * 12 + d.month - first.month;
-    if (idx >= 0 && idx < 6) months[idx] += tx.amount;
+    if (idx >= 0 && idx < 6) target[idx] += tx.amount;
   }
-  return months;
+  return (expense: expense, income: income);
 }
 
 /// Tren bulanan: 6 bulan s/d bulan yang dipilih di Laporan.
 final trendMonthsProvider =
-    FutureProvider.autoDispose<List<int>>((ref) async {
+    FutureProvider.autoDispose<MonthFlow>((ref) async {
   ref.watch(recentTransactionsProvider); // recompute saat data berubah
   final month = ref.watch(reportMonthProvider);
   final first = DateTime(month.year, month.month - 5);
@@ -225,11 +251,15 @@ final trendMonthsProvider =
 /// (7 hari kalender terakhir).
 final trendDailyModeProvider = StateProvider<bool>((_) => false);
 
+/// Arus kartu tren Laporan & chart 7 hari Beranda:
+/// true = keluar (pengeluaran), false = masuk (pemasukan).
+final flowOutProvider = StateProvider<bool>((_) => true);
+
 // ─── Mini chart 7 hari (Beranda) ───────────────────────────────────
 
-/// Transaksi pengeluaran pada satu hari tertentu — dipakai sheet
-/// tap-bar mini chart Beranda.
-final dayExpensesProvider = FutureProvider.autoDispose
+/// Transaksi pemasukan & pengeluaran pada satu hari tertentu — dipakai
+/// sheet tap-bar chart 7 hari (Beranda & Laporan). Transfer dikecualikan.
+final dayTransactionsProvider = FutureProvider.autoDispose
     .family<List<Transaction>, DateTime>((ref, day) async {
   ref.watch(recentTransactionsProvider); // recompute saat data berubah
   final db = ref.watch(dbProvider);
@@ -240,13 +270,13 @@ final dayExpensesProvider = FutureProvider.autoDispose
       .toIso8601String()
       .substring(0, 10);
   final txs = await db.watchTransactionsByDateRange(from, to).first;
-  return txs.where((t) => t.type == 'expense').toList();
+  return txs.where((t) => t.type != 'transfer').toList();
 });
 
-/// Pengeluaran per hari selama 7 hari terakhir (termasuk hari ini),
-/// indeks 0 = 6 hari lalu … indeks 6 = hari ini.
-final last7DaysExpenseProvider =
-    FutureProvider.autoDispose<List<int>>((ref) async {
+/// Pengeluaran & pemasukan per hari selama 7 hari terakhir (termasuk hari
+/// ini), indeks 0 = 6 hari lalu … indeks 6 = hari ini.
+final last7DaysFlowProvider =
+    FutureProvider.autoDispose<MonthFlow>((ref) async {
   ref.watch(recentTransactionsProvider); // recompute saat data berubah
   final db = ref.watch(dbProvider);
   final now = DateTime.now();
@@ -261,23 +291,25 @@ final last7DaysExpenseProvider =
       .substring(0, 10);
   final txs = await db.watchTransactionsByDateRange(from, to).first;
 
-  final daily = List.filled(7, 0);
+  final expense = List.filled(7, 0);
+  final income = List.filled(7, 0);
   for (final tx in txs) {
-    if (tx.type != 'expense') continue;
+    final target = tx.type == 'expense'
+        ? expense
+        : tx.type == 'income'
+            ? income
+            : null;
+    if (target == null) continue;
     final day = DateTime.parse(tx.date);
     final idx = DateTime(day.year, day.month, day.day)
         .difference(today)
         .inDays;
-    if (idx >= -6 && idx <= 0) daily[idx + 6] += tx.amount;
+    if (idx >= -6 && idx <= 0) target[idx + 6] += tx.amount;
   }
-  return daily;
+  return (expense: expense, income: income);
 });
 
 // ─── Anggaran bulanan ──────────────────────────────────────────────
-
-final budgetsProvider = StreamProvider.autoDispose((ref) {
-  return ref.watch(dbProvider).watchBudgets();
-});
 
 /// Tab aktif MainShell — agar widget lintas file (misal banner anggaran)
 /// bisa memindahkan tab.

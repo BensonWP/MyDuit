@@ -14,11 +14,6 @@ String formatDate(String iso) {
   return DateFormat('dd MMM yyyy', 'id_ID').format(d);
 }
 
-String formatDateTime(String iso) {
-  final d = DateTime.parse(iso);
-  return DateFormat('dd MMM yyyy, HH:mm', 'id_ID').format(d);
-}
-
 String formatMonth(String iso) {
   final d = DateTime.parse(iso);
   return DateFormat('MMMM yyyy', 'id_ID').format(d);
@@ -35,7 +30,10 @@ class CurrencyInputFormatter extends TextInputFormatter {
     if (newValue.text.isEmpty) return newValue;
     final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
     if (digits.isEmpty) return const TextEditingValue();
-    final formatted = NumberFormat.decimalPattern('id_ID').format(int.parse(digits));
+    // Clamp 15 digit (≈ Rp 999 triliun): paste lebih panjang tidak
+    // boleh melewati int.parse — 64-bit int masih aman.
+    final safeDigits = digits.length > 15 ? digits.substring(0, 15) : digits;
+    final formatted = NumberFormat.decimalPattern('id_ID').format(int.parse(safeDigits));
     return TextEditingValue(
       text: formatted,
       selection: TextSelection.collapsed(offset: formatted.length),

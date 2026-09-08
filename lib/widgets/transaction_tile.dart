@@ -126,7 +126,7 @@ class TransactionTile extends ConsumerWidget {
               'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
         );
         if (confirmed && context.mounted) {
-          await ref.read(dbProvider).deleteTransaction(transaction.id);
+          await ref.read(dbProvider).deleteTransactionCascade(transaction.id);
         }
       },
       child: Padding(

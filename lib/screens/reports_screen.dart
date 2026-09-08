@@ -4,23 +4,14 @@ import '../db/database.dart';
 import '../providers/database_provider.dart';
 import '../utils/category_color.dart';
 import '../utils/currency.dart';
-import '../utils/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../widgets/donut_chart.dart';
 import 'history_screen.dart';
-import 'home_screen.dart' show showDayExpensesSheet;
+import 'home_screen.dart' show FlowToggle, showDayTransactionsSheet;
 
 /// GlobalKey tab Transaksi — tap legenda donut lompat ke tab Transaksi
 /// dengan filter kategori terisi (dipanggil lintas _ReportsSummaryTab).
 final _summaryToHistoryKey = GlobalKey<HistoryTabState>();
-
-void _showBudgetSheet(BuildContext context) {
-  showModalBottomSheet(
-    context: context,
-    isScrollControlled: true,
-    builder: (_) => const _BudgetSheet(),
-  );
-}
 
 class ReportsScreen extends StatelessWidget {
   const ReportsScreen({super.key});
@@ -32,13 +23,6 @@ class ReportsScreen extends StatelessWidget {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Laporan'),
-          actions: [
-            IconButton(
-              tooltip: 'Anggaran',
-              icon: const Icon(Icons.savings_rounded, size: 22),
-              onPressed: () => _showBudgetSheet(context),
-            ),
-          ],
           bottom: const TabBar(
             tabs: [Tab(text: 'Ringkasan'), Tab(text: 'Transaksi')],
           ),
@@ -79,14 +63,18 @@ class _ReportsSummaryTab extends ConsumerWidget {
     final txs =
         ref.watch(monthTransactionsProvider(month)).valueOrNull ?? [];
     final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
-    final budgets = ref.watch(budgetsProvider).valueOrNull ?? [];
 
     // Hitung di Dart — data sebulan kecil, SQL tambahan tak diperlukan.
     int income = 0, expense = 0;
     final byCategory = <String, int>{};
+    final incomeByCategory = <String, int>{};
     for (final tx in txs) {
       if (tx.type == 'income') {
         income += tx.amount;
+        if (tx.categoryId != null) {
+          incomeByCategory[tx.categoryId!] =
+              (incomeByCategory[tx.categoryId!] ?? 0) + tx.amount;
+        }
       } else if (tx.type == 'expense') {
         expense += tx.amount;
         if (tx.categoryId != null) {
@@ -96,6 +84,8 @@ class _ReportsSummaryTab extends ConsumerWidget {
     }
 
     final rows = byCategory.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final incomeRows = incomeByCategory.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
     final catName = <String, Category>{
@@ -220,35 +210,58 @@ class _ReportsSummaryTab extends ConsumerWidget {
             ),
           const SizedBox(height: D.s6),
 
-          // ── Tren pengeluaran 6 bulan ──
-          const _ExpenseTrendCard(),
-
-          // ── Anggaran bulanan ──
-          if (budgets.isNotEmpty) ...[
-            const SizedBox(height: D.s6),
+          // ── Donut pemasukan per kategori (hanya bila ada pemasukan) ──
+          if (incomeRows.isNotEmpty) ...[
+            const Text('Pemasukan per Kategori',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+            const SizedBox(height: D.s3),
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                const Text('Anggaran Bulan Ini',
-                    style:
-                        TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                TextButton(
-                  onPressed: () => _showBudgetSheet(context),
-                  child: const Text('Kelola'),
+                DonutChart(
+                  segments: _donutSegments(incomeRows),
+                  centerTitle: 'Masuk',
+                  centerValue: formatRupiah(income),
+                ),
+                const SizedBox(width: D.s4),
+                Expanded(
+                  child: Column(
+                    children: [
+                      for (var i = 0; i < incomeRows.length && i < 5; i++)
+                        _legendRow(
+                          context,
+                          categoryColor(incomeRows[i].key),
+                          catName[incomeRows[i].key]?.name ?? 'Tanpa kategori',
+                          incomeRows[i].value,
+                          income == 0
+                              ? 0.0
+                              : incomeRows[i].value / income * 100,
+                          categoryId: incomeRows[i].key,
+                          onTap: () => openCategory(incomeRows[i].key),
+                        ),
+                      if (incomeRows.length > 5)
+                        _legendRow(
+                          context,
+                          D.inkMuted,
+                          'Lainnya (${incomeRows.length - 5})',
+                          incomeRows.skip(5).fold<int>(0, (a, r) => a + r.value),
+                          income == 0
+                              ? 0.0
+                              : incomeRows.skip(5).fold<int>(0, (a, r) => a + r.value) /
+                                  income *
+                                  100,
+                        ),
+                    ],
+                  ),
                 ),
               ],
             ),
-            const SizedBox(height: D.s1),
-            ...budgets.map((b) {
-              final spent = byCategory[b.categoryId] ?? 0;
-              return _BudgetBar(
-                name: b.categoryName,
-                spent: spent,
-                budget: b.monthlyAmount,
-                color: categoryColor(b.categoryId),
-              );
-            }),
+            const SizedBox(height: D.s6),
           ],
+
+          // ── Tren pengeluaran 6 bulan ──
+          const _FlowTrendCard(),
+
           const SizedBox(height: D.s6),
         ],
       ),
@@ -336,10 +349,10 @@ class _ReportsSummaryTab extends ConsumerWidget {
   }
 }
 
-// ── Tren pengeluaran (bulanan / harian) ───────────────────────────
+// ── Tren arus kas masuk/keluar (bulanan / harian) ─────────────────
 
-class _ExpenseTrendCard extends ConsumerWidget {
-  const _ExpenseTrendCard();
+class _FlowTrendCard extends ConsumerWidget {
+  const _FlowTrendCard();
 
   static const _monthNames = [
     'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
@@ -349,6 +362,8 @@ class _ExpenseTrendCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final daily = ref.watch(trendDailyModeProvider);
+    final out = ref.watch(flowOutProvider);
+    const color = D.cobalt;
     final month = ref.watch(reportMonthProvider);
     final reduced = MediaQuery.of(context).disableAnimations;
     final monthName = _monthNames[month.month - 1];
@@ -357,8 +372,9 @@ class _ExpenseTrendCard extends ConsumerWidget {
     // Mode Bulan: 6 bulan s/d bulan laporan; mode Hari: 7 hari kalender
     // terakhir (rolling, tidak bergantung bulan laporan).
     final monthly = ref.watch(trendMonthsProvider).valueOrNull;
-    final weekly = ref.watch(last7DaysExpenseProvider).valueOrNull;
-    final trend = daily ? weekly : monthly;
+    final weekly = ref.watch(last7DaysFlowProvider).valueOrNull;
+    final flow = daily ? weekly : monthly;
+    final values = flow == null ? null : (out ? flow.expense : flow.income);
 
     return Container(
       width: double.infinity,
@@ -402,12 +418,22 @@ class _ExpenseTrendCard extends ConsumerWidget {
             ],
           ),
           const SizedBox(height: D.s3),
-          trend == null
+          Row(
+            children: [
+              _TrendLegendDot(
+                  color: color, label: out ? 'Keluar' : 'Masuk'),
+              const Spacer(),
+              const FlowToggle(),
+            ],
+          ),
+          const SizedBox(height: D.s3),
+          values == null
               ? const SizedBox(height: 84)
               : Builder(builder: (context) {
-                  final maxV = trend.fold<int>(0, (a, b) => b > a ? b : a);
+                  final maxV =
+                      values.fold<int>(0, (a, b) => b > a ? b : a);
                   return TweenAnimationBuilder<double>(
-                    key: ValueKey('$daily-${daily ? 0 : month}'),
+                    key: ValueKey('$daily-$out-${daily ? 0 : month}'),
                     tween: Tween(begin: 0, end: 1),
                     duration: reduced
                         ? Duration.zero
@@ -418,26 +444,28 @@ class _ExpenseTrendCard extends ConsumerWidget {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
-                          for (var i = 0; i < trend.length; i++)
+                          for (var i = 0; i < values.length; i++)
                             Expanded(
                               child: _TrendBar(
-                                amount:
-                                    (trend[i] / (maxV == 0 ? 1 : maxV)) * t,
+                                value:
+                                    (values[i] / (maxV == 0 ? 1 : maxV)) *
+                                        t,
+                                color: color,
                                 isHighlighted: daily
                                     ? i == 6
-                                    : i == trend.length - 1,
+                                    : i == values.length - 1,
                                 label: daily ? _dayTrendLabel(now, i)
                                     : _monthNames[DateTime(month.year,
                                             month.month - 5 + i)
                                         .month -
                                         1],
-                                valueText: trend[i] > 0
-                                    ? formatRupiah(trend[i])
+                                valueText: values[i] > 0
+                                    ? formatRupiah(values[i])
                                     : null,
                                 showValue: !daily,
-                                barWidth: daily ? 6 : 14,
+                                barWidth: daily ? 5 : 7,
                                 onTap: daily
-                                    ? () => showDayExpensesSheet(
+                                    ? () => showDayTransactionsSheet(
                                         context,
                                         now
                                             .subtract(Duration(days: 6 - i)))
@@ -469,9 +497,31 @@ class _ExpenseTrendCard extends ConsumerWidget {
   }
 }
 
+class _TrendLegendDot extends StatelessWidget {
+  const _TrendLegendDot({required this.color, required this.label});
+  final Color color;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: D.s1 + 2),
+        Text(label, style: const TextStyle(fontSize: 11.5, color: D.inkMuted)),
+      ],
+    );
+  }
+}
+
 class _TrendBar extends StatelessWidget {
   const _TrendBar({
-    required this.amount,
+    required this.value,
+    required this.color,
     required this.isHighlighted,
     required this.label,
     required this.showValue,
@@ -480,7 +530,8 @@ class _TrendBar extends StatelessWidget {
     this.onTap,
   });
 
-  final double amount; // 0..1 (relatif periode terboros)
+  final double value; // 0..1 (relatif periode terbesar)
+  final Color color;
   final bool isHighlighted;
   final String label;
   final bool showValue;
@@ -490,12 +541,9 @@ class _TrendBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = amount <= 0
+    final color = value <= 0
         ? D.line
-        : isHighlighted
-            ? D.cobalt
-            : D.cobalt.withValues(alpha: 0.28);
-
+        : this.color.withValues(alpha: isHighlighted ? 1.0 : 0.28);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -517,13 +565,13 @@ class _TrendBar extends StatelessWidget {
             child: Align(
               alignment: Alignment.bottomCenter,
               child: FractionallySizedBox(
-                heightFactor: amount <= 0 ? 0.07 : 0.14 + 0.86 * amount,
+                heightFactor: value <= 0 ? 0.07 : 0.14 + 0.86 * value,
                 child: SizedBox(
                   width: barWidth,
                   child: DecoratedBox(
                     decoration: BoxDecoration(
                       color: color,
-                      borderRadius: BorderRadius.circular(4),
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
                 ),
@@ -543,193 +591,6 @@ class _TrendBar extends StatelessWidget {
                 fontWeight: isHighlighted ? FontWeight.w800 : FontWeight.w500,
                 color: isHighlighted ? D.cobalt : D.inkMuted,
               ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Sheet kelola anggaran ──────────────────────────────────────────
-
-class _BudgetSheet extends ConsumerStatefulWidget {
-  const _BudgetSheet();
-
-  @override
-  ConsumerState<_BudgetSheet> createState() => _BudgetSheetState();
-}
-
-class _BudgetSheetState extends ConsumerState<_BudgetSheet> {
-  Future<void> _setBudget(String categoryId, int current) async {
-    final controller = TextEditingController(
-        text: current > 0 ? current.toString() : '');
-    final amountStr = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Anggaran Bulanan'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          keyboardType: TextInputType.number,
-          decoration: const InputDecoration(
-            labelText: 'Jumlah per bulan (Rp)',
-            prefixText: 'Rp ',
-          ),
-        ),
-        actions: [
-          if (current > 0)
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, 'DELETE'),
-              style: TextButton.styleFrom(foregroundColor: D.expense),
-              child: const Text('Hapus'),
-            ),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, null), child: const Text('Batal')),
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, controller.text),
-              child: const Text('Simpan')),
-        ],
-      ),
-    ).whenComplete(controller.dispose);
-    if (amountStr == null) return;
-    final amount =
-        int.tryParse(amountStr == 'DELETE' ? '0' : amountStr.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
-
-    await ref.read(dbProvider).setBudget(categoryId, amount);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
-    final budgets = ref.watch(budgetsProvider).valueOrNull ?? [];
-    final expenseCategories = categories
-        .where((c) => c.type == 'expense')
-        .toList()
-      ..sort((a, b) => a.name.compareTo(b.name));
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(
-        D.s4, 0, D.s4, MediaQuery.of(context).viewInsets.bottom + D.s4),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Kelola Anggaran',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-          const SizedBox(height: D.s1),
-          const Text(
-            'Anggaran per kategori pengeluaran, dihitung ulang tiap bulan.',
-            style: TextStyle(fontSize: 12.5, color: D.inkMuted),
-          ),
-          const SizedBox(height: D.s4),
-          Flexible(
-            child: ListView(
-              shrinkWrap: true,
-              children: [
-                for (final cat in expenseCategories)
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: Icon(getIcon(cat.icon), size: 20, color: D.inkMuted),
-                    title: Text(cat.name,
-                        style: const TextStyle(
-                            fontSize: 14, fontWeight: FontWeight.w600)),
-                    trailing: Text(
-                      budgets
-                              .where((b) => b.categoryId == cat.id)
-                              .firstOrNull
-                              ?.monthlyAmount
-                              .toString() ??
-                          '—',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: budgets.any((b) => b.categoryId == cat.id)
-                            ? D.cobalt
-                            : D.inkMuted,
-                      ),
-                    ),
-                    onTap: () => _setBudget(
-                      cat.id,
-                      budgets
-                              .where((b) => b.categoryId == cat.id)
-                              .firstOrNull
-                              ?.monthlyAmount ??
-                          0,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ── Bar progress anggaran ──────────────────────────────────────────
-
-class _BudgetBar extends StatelessWidget {
-  const _BudgetBar({
-    required this.name,
-    required this.spent,
-    required this.budget,
-    required this.color,
-  });
-
-  final String name;
-  final int spent;
-  final int budget;
-
-  /// Warna kategori; merah mengambil alih saat anggaran terlampaui.
-  final Color color;
-
-  @override
-  Widget build(BuildContext context) {
-    final ratio = budget == 0 ? 0.0 : spent / budget;
-    final over = ratio > 1.0;
-    final fill = over ? D.expense : color;
-    final textColor = over
-        ? D.expense
-        : ratio >= 0.8
-            ? D.amber
-            : D.ink;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: D.s3),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(name,
-                        style: const TextStyle(
-                            fontSize: 13.5, fontWeight: FontWeight.w600)),
-                    Text(
-                      '${formatRupiah(spent)} / ${formatRupiah(budget)}',
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: textColor,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: D.s1 + 2),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: ratio.clamp(0.0, 1.0),
-                    minHeight: 6,
-                    backgroundColor: D.line,
-                    valueColor: AlwaysStoppedAnimation(fill),
-                  ),
-                ),
-              ],
             ),
           ),
         ],

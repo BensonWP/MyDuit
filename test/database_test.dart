@@ -187,25 +187,6 @@ void main() {
     expect(all.length, 2);
   });
 
-  test('setBudget: insert → update → hapus saat 0', () async {
-    await db.setBudget('cat_food', 500000);
-    var budgets = await db.watchBudgets().first;
-    expect(budgets.length, 1);
-    expect(budgets.first.categoryName, 'Makanan');
-    expect(budgets.first.monthlyAmount, 500000);
-
-    // Update kategori yang sama (upsert, tanpa duplikat).
-    await db.setBudget('cat_food', 300000);
-    budgets = await db.watchBudgets().first;
-    expect(budgets.length, 1);
-    expect(budgets.first.monthlyAmount, 300000);
-
-    // 0 → anggaran dihapus.
-    await db.setBudget('cat_food', 0);
-    budgets = await db.watchBudgets().first;
-    expect(budgets.length, 0);
-  });
-
   test('cicilan lunas: pembayaran ke-N nonaktif+completed, durasi 0 tetap aktif',
       () async {
     final now = DateTime.now().toIso8601String();
@@ -284,13 +265,25 @@ void main() {
       amount: const Value(2000), date: now,
     ));
 
-    final (txCount, billCount) = await db.accountUsage('acc1');
+    final (txCount, billCount, planCount) = await db.accountUsage('acc1');
     expect(txCount, 2); // tx-pay + tx-transfer
     expect(billCount, 1);
+    expect(planCount, 0);
+
+    // Rencana terikat acc1 ikut terhapus oleh cascade.
+    await db.into(db.plans).insert(PlansCompanion.insert(
+      id: 'plan1', name: 'Laptop', createdAt: now,
+    ));
+    await db.into(db.plans).insert(PlansCompanion.insert(
+      id: 'plan2', name: 'Liburan', amount: const Value(5000), createdAt: now,
+    ));
+    await db.customStatement(
+      "UPDATE plans SET account_id = 'acc1' WHERE id = 'plan1'",
+    );
 
     await db.deleteAccountCascade('acc1');
 
-    expect(await db.accountUsage('acc1'), (0, 0));
+    expect(await db.accountUsage('acc1'), (0, 0, 0));
     // Semua baris terkait acc1 lenyap…
     expect(
         await (db.select(db.transactions)
@@ -309,6 +302,9 @@ void main() {
         await (db.select(db.accounts)..where((a) => a.id.equals('acc1')))
             .get(),
         isEmpty);
+    // Rencana terikat acc1 hilang, rencana bebas tetap ada.
+    final plans = await (db.select(db.plans)).get();
+    expect(plans.map((p) => p.id), ['plan2']);
     // …dan acc2 kehilangan hanya transfer-nya, transaksi miliknya utuh.
     final acc2Txs = await (db.select(db.transactions)
           ..where((t) => t.accountId.equals('acc2')))
@@ -316,55 +312,133 @@ void main() {
     expect(acc2Txs.map((t) => t.id), ['tx-other']);
   });
 
-  test('watchUnpaidBillsTotalThisMonth: aktif & belum dibayar bulan ini saja',
+  test('deleteTransactionCascade: pembayaran cicilan dibatalkan → bill aktif lagi',
       () async {
     final now = DateTime.now().toIso8601String();
     await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc1', name: 'Cash', createdAt: now,
+    ));
+
+    // Cicilan 2× bulan; bill completed (2 pembayaran tercatat).
+    await db.into(db.bills).insert(BillsCompanion.insert(
+      id: 'bill1', name: 'HP', accountId: 'acc1',
+      amount: const Value(100000), durationMonths: const Value(2),
+      createdAt: now,
+    ));
+    for (var i = 0; i < 2; i++) {
+      await db.into(db.transactions).insert(TransactionsCompanion.insert(
+        id: 'tx-pay$i', accountId: 'acc1',
+        type: const Value('expense'), amount: const Value(100000),
+        date: now,
+      ));
+      await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
+        id: 'pay$i', billId: 'bill1', transactionId: 'tx-pay$i', paidAt: now,
+      ));
+    }
+    await (db.update(db.bills)..where((b) => b.id.equals('bill1'))).write(
+      const BillsCompanion(active: Value(false), completed: Value(true)),
+    );
+
+    // Batalkan pembayaran terakhir → payment hilang + bill hidup kembali.
+    await db.deleteTransactionCascade('tx-pay1');
+
+    expect(
+      await (db.select(db.billPayments)
+            ..where((p) => p.id.equals('pay1')))
+          .getSingleOrNull(),
+      isNull,
+    );
+    final bill = await (db.select(db.bills)
+          ..where((b) => b.id.equals('bill1')))
+        .getSingle();
+    expect(bill.active, isTrue);
+    expect(bill.completed, isFalse);
+
+    // Transaksi biasa (bukan pembayaran tagihan) tetap terhapus bersih.
+    await db.deleteTransactionCascade('tx-pay1'); // sudah tidak ada — aman
+    await db.into(db.transactions).insert(TransactionsCompanion.insert(
+      id: 'tx-plain', accountId: 'acc1', type: const Value('expense'),
+      amount: const Value(9000), date: now,
+    ));
+    await db.deleteTransactionCascade('tx-plain');
+    expect(
+      await (db.select(db.transactions)
+            ..where((t) => t.id.equals('tx-plain')))
+          .getSingleOrNull(),
+      isNull,
+    );
+  });
+
+  test('billHitsMonth: bayar bulan ini hilang, cicilan habis tak muncul',
+      () async {
+    final now = DateTime.now();
+    final iso = now.toIso8601String();
+    final m1 = DateTime(now.year, now.month - 1).toIso8601String();
+    final m2 = DateTime(now.year, now.month - 2).toIso8601String();
+
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
           id: 'acc1',
           name: 'Cash',
-          createdAt: now,
+          createdAt: iso,
         ));
-
-    // Aktif, belum dibayar → dihitung.
+    // Langganan selamanya.
     await db.into(db.bills).insert(BillsCompanion.insert(
           id: 'b1',
-          name: 'Listrik',
+          name: 'Netflix',
           accountId: 'acc1',
-          amount: const Value(20000),
-          createdAt: now,
+          amount: const Value(50000),
+          dueDay: const Value(10),
+          createdAt: iso,
         ));
-    // Aktif, sudah dibayar bulan ini → dikecualikan.
+    // Cicilan 3×, dibayar 2× (2 & 1 bulan lalu) → bulan ini ke-3,
+    // bulan depan jatah habis.
     await db.into(db.bills).insert(BillsCompanion.insert(
           id: 'b2',
-          name: 'Internet',
+          name: 'Cicilan HP',
           accountId: 'acc1',
-          amount: const Value(30000),
-          createdAt: now,
+          amount: const Value(100000),
+          dueDay: const Value(15),
+          durationMonths: const Value(3),
+          createdAt: iso,
         ));
     await db.into(db.transactions).insert(TransactionsCompanion.insert(
-          id: 'tx-pay',
+          id: 'tx1',
           accountId: 'acc1',
           type: const Value('expense'),
-          amount: const Value(30000),
-          date: now,
+          amount: const Value(100000),
+          date: iso,
         ));
     await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
-          id: 'pay1',
-          billId: 'b2',
-          transactionId: 'tx-pay',
-          paidAt: now,
-        ));
-    // Nonaktif → dikecualikan.
+        id: 'p1', billId: 'b2', transactionId: 'tx1', paidAt: m2));
+    await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
+        id: 'p2', billId: 'b2', transactionId: 'tx1', paidAt: m1));
+    // Listrik, sudah dibayar bulan ini → hilang dari m=0, muncul lagi m=1.
     await db.into(db.bills).insert(BillsCompanion.insert(
           id: 'b3',
-          name: 'Lama',
+          name: 'Listrik',
           accountId: 'acc1',
-          amount: const Value(99000),
-          active: const Value(false),
-          createdAt: now,
+          amount: const Value(200000),
+          dueDay: const Value(20),
+          createdAt: iso,
         ));
+    await db.into(db.transactions).insert(TransactionsCompanion.insert(
+          id: 'tx2',
+          accountId: 'acc1',
+          type: const Value('expense'),
+          amount: const Value(200000),
+          date: iso,
+        ));
+    await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
+        id: 'p3', billId: 'b3', transactionId: 'tx2', paidAt: iso));
 
-    expect(await db.watchUnpaidBillsTotalThisMonth().first, 20000);
+    final rows = await db.watchActiveBillsDetailed().first;
+    List<String> due(int m) =>
+        [for (final r in rows) if (billHitsMonth(r, m)) r.bill.id];
+
+    expect(due(0), ['b1', 'b2']);
+    expect(due(1), ['b1', 'b3']);
+    // Listrik langganan → terus muncul; cicilan HP tetap habis.
+    expect(due(2), ['b1', 'b3']);
   });
 
   test('plans: insert → upsert → delete', () async {
@@ -436,7 +510,7 @@ void main() {
     expect(got.map((t) => t.id), ['tx-today']);
   });
 
-  test('watchBillProjection + billsForMonth: cicilan & bayar bulan ini',
+  test('watchActiveBillsDetailed + billsForMonth: cicilan & bayar bulan ini',
       () async {
     final now = DateTime.now();
     final iso = now.toIso8601String();
@@ -494,10 +568,10 @@ void main() {
     await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
         id: 'p3', billId: 'b3', transactionId: 'tx2', paidAt: iso));
 
-    final entries = await db.watchBillProjection().first;
+    final entries = await db.watchActiveBillsDetailed().first;
     expect(entries.length, 3);
-    final byAmount = {for (final e in entries) e.amount: e};
-    expect(byAmount[50000]!.durationMonths, 0);
+    final byAmount = {for (final e in entries) e.bill.amount: e};
+    expect(byAmount[50000]!.bill.durationMonths, 0);
     expect(byAmount[50000]!.paidThisMonth, false);
     expect(byAmount[100000]!.paidMonths, 2);
     expect(byAmount[100000]!.paidThisMonth, false);
@@ -527,13 +601,17 @@ void main() {
       mkTx('a', 'expense', 10, '2026-04-15T10:00:00'),
       mkTx('b', 'expense', 20, '2026-09-02T10:00:00'),
       mkTx('c', 'expense', 5, '2026-09-30T10:00:00'),
-      mkTx('d', 'income', 999, '2026-09-05T10:00:00'), // diabaikan
+      mkTx('d', 'income', 999, '2026-09-05T10:00:00'), // masuk, bukan keluar
       mkTx('e', 'expense', 7, '2026-03-31T10:00:00'), // sebelum jendela
     ];
-    final buckets = monthTrendBuckets(txs, DateTime(2026, 9));
-    expect(buckets.length, 6);
+    final flow = monthTrendBuckets(txs, DateTime(2026, 9));
+    expect(flow.expense.length, 6);
+    expect(flow.income.length, 6);
     // first = anchor - 5 = April → indeks 0=Apr … 5=Sep.
-    expect(buckets[0], 10); // Apr
-    expect(buckets[5], 25); // Sep = 20 + 5
+    expect(flow.expense[0], 10); // Apr
+    expect(flow.expense[5], 25); // Sep = 20 + 5
+    // Pemasukan terpisah: hanya Sep, tidak menodai expense.
+    expect(flow.income[5], 999);
+    expect(flow.income[0], 0);
   });
 }

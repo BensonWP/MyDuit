@@ -6,21 +6,14 @@ void main() {
 
   test('shouldLock: fitur mati → tidak pernah kunci', () {
     expect(
-      LockService.shouldLock(enabled: false, firstResume: true),
+      LockService.shouldLock(enabled: false, backgroundedAt: now),
       isFalse,
     );
   });
 
-  test('shouldLock: baru dibuka (firstResume) → kunci', () {
+  test('shouldLock: baru dibuka (belum pernah background) → kunci', () {
     expect(
-      LockService.shouldLock(enabled: true, firstResume: true),
-      isTrue,
-    );
-  });
-
-  test('shouldLock: background null → kunci (aman)', () {
-    expect(
-      LockService.shouldLock(enabled: true, firstResume: false),
+      LockService.shouldLock(enabled: true),
       isTrue,
     );
   });
@@ -29,7 +22,6 @@ void main() {
     expect(
       LockService.shouldLock(
         enabled: true,
-        firstResume: false,
         backgroundedAt: now.subtract(const Duration(seconds: 10)),
         now: now,
       ),
@@ -41,7 +33,6 @@ void main() {
     expect(
       LockService.shouldLock(
         enabled: true,
-        firstResume: false,
         backgroundedAt: now.subtract(const Duration(seconds: 31)),
         now: now,
       ),
@@ -53,7 +44,6 @@ void main() {
     expect(
       LockService.shouldLock(
         enabled: true,
-        firstResume: false,
         backgroundedAt: now.subtract(LockService.graceDuration),
         now: now,
       ),

@@ -185,7 +185,7 @@ class _BillsTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final bills = ref.watch(activeBillsStreamProvider).valueOrNull ?? [];
+    final bills = ref.watch(activeBillsProvider);
     final completed = ref.watch(completedBillsStreamProvider).valueOrNull ?? [];
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
     final reducedMotion = MediaQuery.of(context).disableAnimations;

@@ -157,7 +157,6 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       final lockNow = LockService.shouldLock(
         enabled: _locked,
-        firstResume: false,
         backgroundedAt: _backgroundedAt,
       );
       _backgroundedAt = null;
@@ -199,23 +198,49 @@ class MainShell extends ConsumerStatefulWidget {
 class _MainShellState extends ConsumerState<MainShell> {
   final _pageController = PageController();
 
+  // Pemutus loop onPageChanged → navIndexProvider → animateToPage: tanpa ini,
+  // lompatan multi-tab memicu onPageChanged di tab antara (mis. Wallet saat
+  // Beranda → Tagihan) yang memanggil animateToPage lagi dan menghijack
+  // animasi — halaman mendarat di tengah jalan.
+  bool _navAnimating = false;
+  // Penanda sinkron bahwa penulisan navIndex berasal dari PageView (swipe):
+  // halaman sudah bergerak sendiri, listener tidak boleh menganimasikan ulang
+  // (akan melawan drag yang sedang berjalan).
+  bool _swiping = false;
+
+  void _animateToPage(int page) {
+    // ponytail: tap beruntun di tengah animasi di-snap langsung;
+    // antrekan animasinya bila snap terasa kasar.
+    if (_navAnimating) {
+      _pageController.jumpToPage(page);
+      return;
+    }
+    _navAnimating = true;
+    _pageController
+        .animateToPage(
+          page,
+          duration: MediaQuery.of(context).disableAnimations
+              ? Duration.zero
+              : const Duration(milliseconds: 250),
+          curve: Curves.easeOutCubic,
+        )
+        .whenComplete(() => _navAnimating = false)
+        .ignore();
+  }
+
   @override
   void initState() {
     super.initState();
-    ref.listenManual(activeBillsStreamProvider, (prev, next) {
-      final bills = next.valueOrNull;
-      if (bills != null) {
-        unawaited(NotificationService.instance.rescheduleAll(bills));
+    ref.listenManual(activeBillsDetailedProvider, (prev, next) {
+      final rows = next.valueOrNull;
+      if (rows != null) {
+        unawaited(NotificationService.instance
+            .rescheduleAll([for (final r in rows) r.bill]));
       }
     }, fireImmediately: true);
     ref.listenManual(navIndexProvider, (prev, next) {
-      _pageController.animateToPage(
-        next,
-        duration: MediaQuery.of(context).disableAnimations
-            ? Duration.zero
-            : const Duration(milliseconds: 250),
-        curve: Curves.easeOutCubic,
-      );
+      if (_swiping) return; // asal PageView: halaman sudah bergerak sendiri
+      _animateToPage(next);
     });
   }
 
@@ -241,7 +266,15 @@ class _MainShellState extends ConsumerState<MainShell> {
     return Scaffold(
       body: PageView(
         controller: _pageController,
-        onPageChanged: (i) => ref.read(navIndexProvider.notifier).state = i,
+        onPageChanged: (i) {
+          if (_navAnimating) return; // tab antara saat lompatan programatik
+          _swiping = true; // set/reset sinkron: listener Riverpod sinkron
+          try {
+            ref.read(navIndexProvider.notifier).state = i;
+          } finally {
+            _swiping = false;
+          }
+        },
         children: _screens,
       ),
       floatingActionButton: showFab

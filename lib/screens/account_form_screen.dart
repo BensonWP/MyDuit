@@ -277,7 +277,7 @@ class _ImageOption extends StatelessWidget {
     final logo = asset != null
         ? ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Image.asset(asset!, width: 48, height: 48))
+            child: Image.asset(asset!, width: 48, height: 48, fit: BoxFit.cover))
         : BrandInitial(brand: brand!, size: 48);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,

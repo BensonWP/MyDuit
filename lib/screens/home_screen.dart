@@ -5,7 +5,6 @@ import 'package:intl/intl.dart';
 import '../db/database.dart';
 import '../providers/database_provider.dart';
 import '../utils/app_icons.dart';
-import '../utils/category_color.dart';
 import '../utils/currency.dart';
 import '../utils/dates.dart';
 import '../utils/tx_grouping.dart';
@@ -36,7 +35,7 @@ class HomeScreen extends ConsumerWidget {
             .valueOrNull ??
         [];
     final totalBalance = ref.watch(totalBalanceProvider).valueOrNull;
-    final unpaidBills = ref.watch(unpaidBillsTotalProvider).valueOrNull ?? 0;
+    final unpaidBills = ref.watch(unpaidBillsTotalProvider);
     final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
     final reducedMotion = MediaQuery.of(context).disableAnimations;
     final catMap = <String, String>{
@@ -60,11 +59,8 @@ class HomeScreen extends ConsumerWidget {
             ),
             const SizedBox(height: D.s6),
 
-            // ── Tagihan berikutnya ──
-            _NextBillCard(reducedMotion: reducedMotion),
-
-            // ── Peringatan anggaran ──
-            const _BudgetAlertBanner(),
+            // ── Tagihan belum dibayar ──
+            _UnpaidBillsCard(reducedMotion: reducedMotion),
 
             if (accounts.isNotEmpty) ...[
               const SizedBox(height: D.s6),
@@ -104,9 +100,9 @@ class HomeScreen extends ConsumerWidget {
               ),
             ],
 
-            // ── Pengeluaran 7 hari ──
+            // ── Arus 7 hari ──
             const SizedBox(height: D.s6),
-            const _SectionHeader(title: 'Pengeluaran 7 Hari'),
+            _SectionHeader(title: 'Arus 7 Hari', trailing: const FlowToggle()),
             const SizedBox(height: D.s3),
             const _WeekBars(),
 
@@ -134,46 +130,88 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-// ── Tagihan berikutnya ─────────────────────────────────────────────
+// ── Tagihan bulan terpilih di hero (yang lunas bulan itu hilang) ───
 
-class _NextBillCard extends ConsumerWidget {
-  const _NextBillCard({required this.reducedMotion});
+class _UnpaidBillsCard extends ConsumerWidget {
+  const _UnpaidBillsCard({required this.reducedMotion});
   final bool reducedMotion;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final bills = ref.watch(activeBillsStreamProvider).valueOrNull ?? const [];
+    final offset = ref.watch(homeMonthOffsetProvider);
+    final bills = ref.watch(monthBillsProvider(offset));
     if (bills.isEmpty) return const SizedBox.shrink();
-
-    // Tagihan paling dekat jatuh tempo.
-    Bill nearest = bills.first;
-    for (final b in bills) {
-      if (daysUntilDue(b.dueDay) < daysUntilDue(nearest.dueDay)) nearest = b;
-    }
-
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? const [];
-    final accountName = accounts
-            .where((a) => a.id == nearest.accountId)
-            .firstOrNull
-            ?.name ??
-        '-';
-    final payments =
-        ref.watch(billPaymentsProvider(nearest.id)).valueOrNull ?? const [];
-    final paid = paidThisMonth(payments);
-    final daysLeft = daysUntilDue(nearest.dueDay);
-    final urgent = daysLeft <= 3;
+    final now = DateTime.now();
+    final title = offset == 0
+        ? 'Tagihan'
+        : 'Tagihan · ${DateFormat('MMM yyyy', 'id_ID').format(DateTime(now.year, now.month + offset))}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SectionHeader(title: title),
+        const SizedBox(height: D.s3),
+        for (var i = 0; i < bills.length; i++)
+          _UnpaidBillTile(
+            bill: bills[i],
+            accountName: accounts
+                    .where((a) => a.id == bills[i].accountId)
+                    .firstOrNull
+                    ?.name ??
+                '-',
+            index: i,
+            animate: !reducedMotion,
+            payable: offset == 0,
+          ),
+      ],
+    );
+  }
+}
+
+class _UnpaidBillTile extends ConsumerStatefulWidget {
+  const _UnpaidBillTile({
+    required this.bill,
+    required this.accountName,
+    required this.index,
+    required this.animate,
+    required this.payable,
+  });
+
+  final Bill bill;
+  final String accountName;
+  final int index;
+  final bool animate;
+
+  /// false = bulan proyeksi: pratinjau saja, tanpa H-N dan tombol Bayar.
+  final bool payable;
+
+  @override
+  ConsumerState<_UnpaidBillTile> createState() => _UnpaidBillTileState();
+}
+
+class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
+  bool _paying = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final bill = widget.bill;
+    final payable = widget.payable;
+    final daysLeft = daysUntilDue(bill.dueDay);
+    final urgent = payable && daysLeft <= 3;
     // Kurang berapa vs wallet yang akan di-debit (bukan total saldo).
     final walletBalance =
-        ref.watch(accountBalanceProvider(nearest.accountId)).valueOrNull;
-    final short = walletBalance == null ? 0 : nearest.amount - walletBalance;
+        ref.watch(accountBalanceProvider(bill.accountId)).valueOrNull;
+    final short = walletBalance == null ? 0 : bill.amount - walletBalance;
 
     return Container(
+      margin: const EdgeInsets.only(bottom: D.s3),
       padding: const EdgeInsets.all(D.s4),
       decoration: BoxDecoration(
         color: D.card,
         borderRadius: BorderRadius.circular(D.rMd),
         border: Border.all(
-            color: urgent && !paid ? D.amber.withValues(alpha: 0.5) : D.line),
+            color: urgent ? D.amber.withValues(alpha: 0.5) : D.line),
       ),
       child: Row(
         children: [
@@ -191,21 +229,14 @@ class _NextBillCard extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Tagihan Berikutnya',
-                    style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.4,
-                        color: D.inkMuted.withValues(alpha: 0.9))),
-                const SizedBox(height: 2),
-                Text(nearest.name,
+                Text(bill.name,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 14, fontWeight: FontWeight.w700)),
-                Text('Tgl ${nearest.dueDay} · $accountName',
+                Text('Tgl ${bill.dueDay} · ${widget.accountName}',
                     style: const TextStyle(fontSize: 11.5, color: D.inkMuted)),
-                if (!paid && short > 0)
+                if (short > 0)
                   Text('Kurang ${formatRupiah(short)}',
                       style: const TextStyle(
                           fontSize: 11.5,
@@ -218,34 +249,19 @@ class _NextBillCard extends ConsumerWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(formatRupiah(nearest.amount),
+              Text(formatRupiah(bill.amount),
                   style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
                       letterSpacing: -0.3)),
-              const SizedBox(height: D.s1 + 2),
-              if (paid)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: D.s2, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: D.income.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(D.rSm),
-                  ),
-                  child: const Text('✓ Dibayar',
-                      style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700,
-                          color: D.income)),
-                )
-              else ...[
+              if (payable) ...[
+                const SizedBox(height: D.s1 + 2),
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: D.s2, vertical: 2),
                   decoration: BoxDecoration(
-                    color: urgent
-                        ? D.expense.withValues(alpha: 0.1)
-                        : D.surface,
+                    color:
+                        urgent ? D.expense.withValues(alpha: 0.1) : D.surface,
                     borderRadius: BorderRadius.circular(D.rSm),
                   ),
                   child: Text('H-$daysLeft',
@@ -256,13 +272,24 @@ class _NextBillCard extends ConsumerWidget {
                 ),
                 const SizedBox(height: D.s1 + 2),
                 GestureDetector(
-                  onTap: () =>
-                      confirmAndPayBill(context, ref, nearest, accountName),
+                  onTap: _paying
+                      ? null
+                      : () async {
+                          // Guard double-tap: dialog kedua = pembayaran ganda.
+                          if (_paying) return;
+                          setState(() => _paying = true);
+                          try {
+                            await confirmAndPayBill(
+                                context, ref, bill, widget.accountName);
+                          } finally {
+                            if (mounted) setState(() => _paying = false);
+                          }
+                        },
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                         horizontal: D.s3, vertical: 5),
                     decoration: BoxDecoration(
-                      color: D.cobalt,
+                      color: D.cobalt.withValues(alpha: _paying ? 0.4 : 1.0),
                       borderRadius: BorderRadius.circular(D.rSm),
                     ),
                     child: const Text('Bayar',
@@ -278,127 +305,9 @@ class _NextBillCard extends ConsumerWidget {
         ],
       ),
     )
-        .animate(target: reducedMotion ? 0 : 1)
-        .fade(duration: 300.ms, delay: 100.ms)
+        .animate(target: widget.animate ? 1 : 0)
+        .fade(duration: 300.ms, delay: (60 * widget.index).clamp(0, 400).ms)
         .slideY(begin: 0.06, end: 0, duration: 300.ms, curve: Curves.easeOutCubic);
-  }
-}
-
-// ── Peringatan anggaran (80%+ terpakai) ───────────────────────────
-
-class _BudgetAlertBanner extends ConsumerWidget {
-  const _BudgetAlertBanner();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final now = DateTime.now();
-    final txs = ref
-            .watch(monthTransactionsProvider(DateTime(now.year, now.month)))
-            .valueOrNull ??
-        [];
-    final budgets = ref.watch(budgetsProvider).valueOrNull ?? [];
-    if (budgets.isEmpty) return const SizedBox.shrink();
-
-    // Agregasi pengeluaran per kategori.
-    final byCat = <String, int>{};
-    for (final tx in txs) {
-      if (tx.type == 'expense' && tx.categoryId != null) {
-        byCat[tx.categoryId!] = (byCat[tx.categoryId!] ?? 0) + tx.amount;
-      }
-    }
-
-    // Cari kategori yang ≥ 80% anggaran, urut rasio tertinggi.
-    final alerts = <({String name, int spent, int budget, double ratio, Color color})>[];
-    for (final b in budgets) {
-      final spent = byCat[b.categoryId] ?? 0;
-      final ratio = b.monthlyAmount > 0 ? spent / b.monthlyAmount : 0.0;
-      if (ratio >= 0.8) {
-        alerts.add((
-          name: b.categoryName,
-          spent: spent,
-          budget: b.monthlyAmount,
-          ratio: ratio,
-          color: categoryColor(b.categoryId),
-        ));
-      }
-    }
-    if (alerts.isEmpty) return const SizedBox.shrink();
-    alerts.sort((a, b) => b.ratio.compareTo(a.ratio));
-
-    final worst = alerts.first;
-    final over = worst.ratio >= 1.0;
-    final color = over ? D.expense : D.amber;
-    final pct = (worst.ratio * 100).round();
-
-    return Padding(
-      padding: const EdgeInsets.only(top: D.s3),
-      child: GestureDetector(
-        onTap: () => ref.read(navIndexProvider.notifier).state = 1,
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(D.s3 + 2),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(D.rMd),
-            border: Border.all(color: color.withValues(alpha: 0.30)),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                over ? Icons.warning_rounded : Icons.trending_up_rounded,
-                color: color,
-                size: 20,
-              ),
-              const SizedBox(width: D.s2 + 2),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      over
-                          ? 'Anggaran terlampaui!'
-                          : 'Hampir capai anggaran',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: color,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${worst.name} · ${formatRupiah(worst.spent)} / ${formatRupiah(worst.budget)} ($pct%)',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              ),
-              if (alerts.length > 1)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: D.s2, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: color.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(D.rSm),
-                  ),
-                  child: Text(
-                    '+${alerts.length - 1}',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: color,
-                    ),
-                  ),
-                ),
-              const SizedBox(width: D.s2),
-              Icon(Icons.chevron_right_rounded, color: color, size: 20),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
 
@@ -411,7 +320,10 @@ class _WeekBars extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final daily = ref.watch(last7DaysExpenseProvider).valueOrNull;
+    final flow = ref.watch(last7DaysFlowProvider).valueOrNull;
+    final out = ref.watch(flowOutProvider);
+    final values = flow == null ? null : (out ? flow.expense : flow.income);
+    final color = out ? D.cobalt : D.income;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final reduced = MediaQuery.of(context).disableAnimations;
@@ -424,11 +336,11 @@ class _WeekBars extends ConsumerWidget {
         borderRadius: BorderRadius.circular(D.rMd),
         border: Border.all(color: D.line),
       ),
-      child: daily == null
+      child: values == null
           ? const SizedBox(height: 100)
           : Builder(builder: (context) {
-              final maxV = daily.fold<int>(0, (a, b) => b > a ? b : a);
-              final weekTotal = daily.fold<int>(0, (a, b) => a + b);
+              final maxV = values.fold<int>(0, (a, b) => b > a ? b : a);
+              final total = values.fold<int>(0, (a, b) => a + b);
               return TweenAnimationBuilder<double>(
                 tween: Tween(begin: 0, end: 1),
                 duration:
@@ -437,18 +349,15 @@ class _WeekBars extends ConsumerWidget {
                 builder: (context, t, _) => Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(weekTotal == 0 ? 'Belum ada pengeluaran' : 'Total',
-                            style: const TextStyle(
-                                fontSize: 12, color: D.inkMuted)),
-                        if (weekTotal > 0)
-                          Text(formatRupiah(weekTotal),
-                              style: const TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w800)),
-                      ],
-                    ),
+                    if (total == 0)
+                      const Text('Belum ada transaksi',
+                          style:
+                              TextStyle(fontSize: 12, color: D.inkMuted))
+                    else
+                      _FlowLegend(
+                          color: color,
+                          label: out ? 'Keluar' : 'Masuk',
+                          value: formatRupiah(total)),
                     const SizedBox(height: D.s3),
                     SizedBox(
                       height: 70,
@@ -458,8 +367,10 @@ class _WeekBars extends ConsumerWidget {
                           for (var i = 0; i < 7; i++)
                             Expanded(
                               child: _WeekBar(
-                                amount: (daily[i] / (maxV == 0 ? 1 : maxV)) *
+                                value: (values[i] /
+                                        (maxV == 0 ? 1 : maxV)) *
                                     t,
+                                color: color,
                                 isToday: i == 6,
                                 day: today.subtract(Duration(days: 6 - i)),
                                 label: _dayInitials[
@@ -477,42 +388,68 @@ class _WeekBars extends ConsumerWidget {
   }
 }
 
+class _FlowLegend extends StatelessWidget {
+  const _FlowLegend(
+      {required this.color, required this.label, required this.value});
+  final Color color;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: D.s1 + 2),
+        Text('$label ',
+            style: const TextStyle(fontSize: 12, color: D.inkMuted)),
+        Text(value,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+      ],
+    );
+  }
+}
+
 class _WeekBar extends StatelessWidget {
   const _WeekBar({
-    required this.amount,
+    required this.value,
+    required this.color,
     required this.isToday,
     required this.label,
     required this.day,
   });
 
-  final double amount; // 0..1 (relatif hari terboros)
+  final double value; // 0..1 (relatif hari terbesar)
+  final Color color;
   final bool isToday;
   final String label;
   final DateTime day;
 
   @override
   Widget build(BuildContext context) {
-    final color = amount <= 0
-        ? D.line
-        : isToday
-            ? D.cobalt
-            : D.cobalt.withValues(alpha: 0.28);
+    final dim = isToday ? 1.0 : 0.28;
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => showDayExpensesSheet(context, day),
+      onTap: () => showDayTransactionsSheet(context, day),
       child: Column(
         children: [
           Expanded(
             child: Align(
               alignment: Alignment.bottomCenter,
               child: FractionallySizedBox(
-                heightFactor: amount <= 0 ? 0.07 : 0.14 + 0.86 * amount,
+                heightFactor: value <= 0 ? 0.07 : 0.14 + 0.86 * value,
                 child: Container(
-                  width: 14,
+                  width: 8,
                   decoration: BoxDecoration(
-                    color: color,
-                    borderRadius: BorderRadius.circular(4),
+                    color: value <= 0
+                        ? D.line
+                        : color.withValues(alpha: dim),
+                    borderRadius: BorderRadius.circular(3),
                   ),
                 ),
               ),
@@ -533,7 +470,7 @@ class _WeekBar extends StatelessWidget {
 
 // ── Bottom sheet pengeluaran satu hari ─────────────────────────────
 
-void showDayExpensesSheet(BuildContext context, DateTime day) {
+void showDayTransactionsSheet(BuildContext context, DateTime day) {
   showModalBottomSheet(
     context: context,
     isScrollControlled: true,
@@ -554,7 +491,10 @@ class _DayExpensesSheet extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final txs = ref.watch(dayExpensesProvider(day)).valueOrNull ?? [];
+    final out = ref.watch(flowOutProvider);
+    final txs = (ref.watch(dayTransactionsProvider(day)).valueOrNull ?? [])
+        .where((t) => out ? t.type == 'expense' : t.type == 'income')
+        .toList();
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
     final catMap = <String, String>{
       for (final c in ref.watch(categoriesStreamProvider).valueOrNull ?? const [])
@@ -586,10 +526,14 @@ class _DayExpensesSheet extends ConsumerWidget {
           ),
         ),
         if (txs.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(D.s6),
-            child: Text('Tidak ada pengeluaran hari ini',
-                style: TextStyle(fontSize: 13, color: D.inkMuted)),
+          Padding(
+            padding: const EdgeInsets.all(D.s6),
+            child: Text(
+                out
+                    ? 'Tidak ada pengeluaran hari ini'
+                    : 'Tidak ada pemasukan hari ini',
+                style:
+                    const TextStyle(fontSize: 13, color: D.inkMuted)),
           )
         else
           Expanded(
@@ -638,9 +582,24 @@ class _HeroCard extends ConsumerStatefulWidget {
 }
 
 class _HeroCardState extends ConsumerState<_HeroCard> {
-  int _page = 0;
+  late int _page;
+  late final PageController _controller;
 
   static const _monthsAhead = 12; // 1 (saldo) + 12 (proyeksi) = 13 halaman
+
+  @override
+  void initState() {
+    super.initState();
+    // Remount (mis. setelah layar kunci) → mulai dari bulan terakhir.
+    _page = ref.read(homeMonthOffsetProvider);
+    _controller = PageController(initialPage: _page);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -667,10 +626,14 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
           SizedBox(
             height: 124,
             child: PageView.builder(
+              controller: _controller,
               itemCount: 1 + _monthsAhead,
-              onPageChanged: (p) => setState(() => _page = p),
+              onPageChanged: (p) {
+                setState(() => _page = p);
+                ref.read(homeMonthOffsetProvider.notifier).state = p;
+              },
               itemBuilder: (ctx, p) =>
-                  p == 0 ? _balancePage() : _projectionPage(p - 1),
+                  p == 0 ? _balancePage() : _projectionPage(p),
             ),
           ),
           const SizedBox(height: D.s2),
@@ -810,10 +773,10 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
     );
   }
 
-  // ── Halaman 1–12: proyeksi bulan ke-m ──
+  // ── Halaman 1–12: proyeksi bulan ke-m (m ≥ 1) ──
 
   Widget _projectionPage(int m) {
-    final entries = ref.watch(billProjectionProvider).valueOrNull;
+    final entries = ref.watch(activeBillsDetailedProvider).valueOrNull;
     final balance = widget.totalBalance;
     final includePlans = ref.watch(includePlansInProjectionProvider);
     final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
@@ -834,16 +797,19 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          m == 0 ? 'Proyeksi · $monthName · bulan ini' : 'Proyeksi · $monthName',
+          'Proyeksi · $monthName',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
               color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w600),
         ),
         const SizedBox(height: D.s1),
-        // Format sama dengan halaman Total Saldo: angka besar = saldo akhir.
+        // Tanpa minus: proyeksi negatif → tampilkan saldo total saat ini,
+        // kekurangannya di baris merah bawah.
         Text(
-          projection == null ? '…' : formatRupiah(projection),
+          projection == null
+              ? '…'
+              : formatRupiah(projection < 0 ? balance! : projection),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
@@ -889,13 +855,47 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
 // ── Section header ─────────────────────────────────────────────────
 
 class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.title});
+  const _SectionHeader({required this.title, this.trailing});
   final String title;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
-    return Text(title,
-        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700));
+    return Row(
+      children: [
+        Expanded(
+          child: Text(title,
+              style:
+                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        ),
+        if (trailing != null) trailing!,
+      ],
+    );
+  }
+}
+
+/// Pilihan arus kartu tren (dipakai Beranda & Laporan).
+class FlowToggle extends ConsumerWidget {
+  const FlowToggle({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final out = ref.watch(flowOutProvider);
+    return SegmentedButton<bool>(
+      selected: {out},
+      showSelectedIcon: false,
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        textStyle: WidgetStatePropertyAll(
+            TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+      ),
+      segments: const [
+        ButtonSegment(value: true, label: Text('Keluar')),
+        ButtonSegment(value: false, label: Text('Masuk')),
+      ],
+      onSelectionChanged: (s) =>
+          ref.read(flowOutProvider.notifier).state = s.first,
+    );
   }
 }
 

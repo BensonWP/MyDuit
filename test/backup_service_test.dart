@@ -77,4 +77,38 @@ void main() {
       expect(BackupService.validateBackupFile(bytes), isNull);
     });
   });
+
+  group('snapshotCurrentDb', () {
+    late Directory tmpDir;
+
+    setUp(() {
+      tmpDir = Directory.systemTemp.createTempSync('snapshot_test_');
+    });
+
+    tearDown(() {
+      tmpDir.deleteSync(recursive: true);
+    });
+
+    test('DB belum ada → null, tanpa file', () {
+      expect(BackupService.snapshotCurrentDb(tmpDir), isNull);
+    });
+
+    test('DB ada → tersalin, snapshot lama dibuang', () async {
+      File('${tmpDir.path}/myduit.sqlite').writeAsBytesSync([1, 2, 3]);
+      final old = File('${tmpDir.path}/myduit_pre_restore_lama.sqlite')
+        ..writeAsBytesSync([0]);
+
+      final snap = BackupService.snapshotCurrentDb(tmpDir);
+      expect(snap, isNotNull);
+      expect(snap!.readAsBytesSync(), [1, 2, 3]);
+      expect(old.existsSync(), isFalse);
+      expect(
+          tmpDir
+              .listSync()
+              .whereType<File>()
+              .where((f) => f.path.contains('_pre_restore_'))
+              .length,
+          1);
+    });
+  });
 }

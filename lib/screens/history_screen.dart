@@ -6,10 +6,6 @@ import '../utils/currency.dart';
 import '../utils/tx_grouping.dart';
 import '../widgets/transaction_tile.dart';
 
-/// GlobalKey tab Transaksi — dipakai Laporan untuk tap-through kategori
-/// (legenda donut → tab Transaksi terfilter).
-final transactionTabKey = GlobalKey<HistoryTabState>();
-
 /// Rentang waktu cepat untuk filter transaksi.
 enum _TimeMode { all, thisMonth, lastMonth, last12 }
 

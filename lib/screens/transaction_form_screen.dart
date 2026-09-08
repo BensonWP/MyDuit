@@ -121,7 +121,7 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
     );
     if (!confirmed) return;
 
-    await ref.read(dbProvider).deleteTransaction(widget.existing!.id);
+    await ref.read(dbProvider).deleteTransactionCascade(widget.existing!.id);
     if (mounted) Navigator.pop(context);
   }
 

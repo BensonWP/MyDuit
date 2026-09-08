@@ -123,15 +123,46 @@ class BackupService {
       // Sudah tertutup — abaikan.
     }
 
-    // Timpa file DB
+    // Timpa file DB. WAL/SHM sisa koneksi lama WAJIB dibuang — WAL lama
+    // yang masih berisi halaman database bisa diterapkan ke file backup
+    // yang baru dan mengkorupkan datanya.
     final dbFolder = await getApplicationDocumentsDirectory();
     final dbFile = File('${dbFolder.path}/myduit.sqlite');
+    for (final suffix in ['-wal', '-shm']) {
+      final sidecar = File('${dbFile.path}$suffix');
+      if (sidecar.existsSync()) sidecar.deleteSync();
+    }
+    // Snapshot data saat ini sebelum ditimpa — kalau salah pilih file,
+    // pengguna masih bisa pulih dari berkas ini.
+    snapshotCurrentDb(dbFolder);
     await dbFile.writeAsBytes(bytes, flush: true);
 
     // Buat koneksi baru
     ref.invalidate(dbProvider);
 
     return true;
+  }
+
+  /// Salin DB saat ini ke `myduit_pre_restore_<stamp>.sqlite`, ganti snapshot
+  /// lama (cukup satu — yang terbaru yang berguna). Return null bila DB
+  /// belum ada (install pertama).
+  static File? snapshotCurrentDb(Directory folder) {
+    final dbFile = File('${folder.path}/myduit.sqlite');
+    if (!dbFile.existsSync()) return null;
+    for (final old in folder
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.contains('_pre_restore_'))) {
+      old.deleteSync();
+    }
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 19)
+        .replaceAll(':', '')
+        .replaceAll('T', '_');
+    final snap = File('${folder.path}/myduit_pre_restore_$stamp.sqlite');
+    dbFile.copySync(snap.path);
+    return snap;
   }
 
   // ── CSV EXPORT ──────────────────────────────────────────────────
