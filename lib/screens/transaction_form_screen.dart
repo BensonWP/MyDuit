@@ -9,6 +9,10 @@ import '../utils/app_icons.dart';
 import '../theme/app_theme.dart';
 import '../widgets/confirm_dialog.dart';
 
+/// Format "10 Sep 2026 · 14:30" untuk picker tanggal+jam di form.
+String _formatDateTime(DateTime d) =>
+    '${formatDate(d.toIso8601String())} · ${formatTime(d.toIso8601String())}';
+
 /// Form transaksi.
 /// - Tambah: tampil sebagai modal bottom sheet lewat [showAddSheet].
 /// - Edit: tampil sebagai halaman penuh lewat [TransactionForm.existing].
@@ -119,9 +123,17 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       description:
           'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
     );
-    if (!confirmed) return;
+    if (!confirmed || !mounted) return;
 
-    await ref.read(dbProvider).deleteTransactionCascade(widget.existing!.id);
+    final db = ref.read(dbProvider);
+    // Snapshot dulu agar bisa diurungkan lewat snackbar di layar sebelumnya.
+    final undo = await db.captureTransactionUndo(widget.existing!.id);
+    await db.deleteTransactionCascade(widget.existing!.id);
+    // Snackbar sebelum pop — context form sudah tidak valid setelahnya.
+    if (undo != null && mounted) {
+      showUndoBar(context, 'Transaksi dihapus',
+          () => db.restoreTransactionUndo(undo));
+    }
     if (mounted) Navigator.pop(context);
   }
 
@@ -229,18 +241,39 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       ListTile(
         leading: const Icon(Icons.calendar_today_rounded,
             size: 20, color: D.inkMuted),
-        title: const Text('Tanggal', style: TextStyle(fontSize: 14)),
-        subtitle: Text(formatDate(_date.toIso8601String()),
+        title: const Text('Tanggal & Jam', style: TextStyle(fontSize: 14)),
+        subtitle: Text(_formatDateTime(_date),
             style: const TextStyle(fontSize: 12.5)),
         contentPadding: EdgeInsets.zero,
         onTap: () async {
+          // Jam lama dipertahankan — date picker tanpa ini menghapus jam.
           final picked = await showDatePicker(
             context: context,
             initialDate: _date,
             firstDate: DateTime(2020),
             lastDate: DateTime.now(),
           );
-          if (picked != null) setState(() => _date = picked);
+          if (picked != null) {
+            setState(() => _date = DateTime(picked.year, picked.month,
+                picked.day, _date.hour, _date.minute));
+          }
+        },
+      ),
+      ListTile(
+        leading: const Icon(Icons.schedule_rounded, size: 20, color: D.inkMuted),
+        title: const Text('Jam', style: TextStyle(fontSize: 14)),
+        subtitle: Text(formatTime(_date.toIso8601String()),
+            style: const TextStyle(fontSize: 12.5)),
+        contentPadding: EdgeInsets.zero,
+        onTap: () async {
+          final picked = await showTimePicker(
+            context: context,
+            initialTime: TimeOfDay.fromDateTime(_date),
+          );
+          if (picked != null) {
+            setState(() => _date = DateTime(
+                _date.year, _date.month, _date.day, picked.hour, picked.minute));
+          }
         },
       ),
       const SizedBox(height: D.s2),

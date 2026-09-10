@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,46 +9,66 @@ import 'package:sqlite3/sqlite3.dart';
 import '../db/database.dart';
 import '../providers/database_provider.dart';
 
+/// Hasil pulihkan: [restored] = sukses; [error] = pesan kegagalan
+/// (null saat batal, berisi alasan saat file tidak valid).
+typedef RestoreResult = ({bool restored, String? error});
+
+/// Exception dengan pesan siap-tampil ke pengguna.
+class BackupException implements Exception {
+  BackupException(this.message);
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 /// Service backup/restore/export SQLite database.
 class BackupService {
   BackupService._();
 
   /// Jalankan WAL checkpoint agar file yang disalin lengkap
   /// (wal + shm sudah flush ke db utama).
-  static Future<void> _checkpoint(MyDuitDatabase db) async {
+  static Future<void> _checkpoint(MyDuitDatabase db,
+      {String mode = 'FULL'}) async {
     try {
-      await db.customStatement('PRAGMA wal_checkpoint(FULL)');
+      await db.customStatement('PRAGMA wal_checkpoint($mode)');
     } catch (_) {
       // WAL mode mungkin belum aktif — abaikan.
     }
+  }
+
+  /// Stamp nama file dengan jam: dua backup/ekspor dalam satu hari
+  /// tidak saling menimpa.
+  static String _stamp() {
+    final now = DateTime.now();
+    String p(int v) => v.toString().padLeft(2, '0');
+    return '${now.year}-${p(now.month)}-${p(now.day)}-${p(now.hour)}${p(now.minute)}';
   }
 
   // ── BACKUP ──────────────────────────────────────────────────────
 
   /// Backup database ke lokasi pilihan user via SAF.
   /// Return: path file yang tersimpan, atau null jika batal.
+  /// file_picker 10.x MEWAJIBKAN `bytes` di Android/iOS — tanpa itu
+  /// ArgumentError dilempar sebelum dialog muncul. Plugin yang menulis
+  /// data (SAF di Android, dialog+write di desktop).
   static Future<String?> backupToLocation(MyDuitDatabase db) async {
     await _checkpoint(db);
 
     final dbFolder = await getApplicationDocumentsDirectory();
     final srcFile = File('${dbFolder.path}/myduit.sqlite');
-    if (!srcFile.existsSync()) return null;
-
-    final now = DateTime.now();
-    final fileName =
-        'myduit-backup-${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}.sqlite';
+    if (!srcFile.existsSync()) {
+      throw BackupException('Database belum ada — catat transaksi dulu');
+    }
+    final bytes = await srcFile.readAsBytes();
 
     final result = await FilePicker.platform.saveFile(
       dialogTitle: 'Simpan backup MyDuit',
-      fileName: fileName,
+      fileName: 'myduit-backup-${_stamp()}.sqlite',
       type: FileType.custom,
       allowedExtensions: ['sqlite'],
+      bytes: bytes,
     );
-
-    if (result == null) return null;
-
-    final destFile = File(result);
-    await destFile.writeAsBytes(await srcFile.readAsBytes(), flush: true);
     return result;
   }
 
@@ -98,49 +119,54 @@ class BackupService {
   // ── RESTORE ─────────────────────────────────────────────────────
 
   /// Restore database dari file pilihan user via SAF.
-  /// Return: true jika berhasil, false jika batal/gagal.
-  static Future<bool> restoreFromFile(WidgetRef ref) async {
+  /// Batal → (restored: false, error: null).
+  /// File tidak valid → error berisi pesan validasi.
+  static Future<RestoreResult> restoreFromFile(WidgetRef ref) async {
     final result = await FilePicker.platform.pickFiles(
       dialogTitle: 'Pilih file backup MyDuit',
       type: FileType.custom,
       allowedExtensions: ['sqlite'],
     );
 
-    if (result == null || result.files.isEmpty) return false;
+    if (result == null || result.files.isEmpty) {
+      return (restored: false, error: null);
+    }
 
     final pickedFile = result.files.first;
     final bytes = pickedFile.bytes ?? await File(pickedFile.path!).readAsBytes();
 
-    // Validasi
+    // Validasi SEBELUM menyentuh DB aktif.
     final error = validateBackupFile(bytes);
-    if (error != null) return false;
+    if (error != null) return (restored: false, error: error);
 
-    // Tutup koneksi DB aktif
+    // Flush WAL ke file utama agar snapshot pra-restore tidak kehilangan
+    // transaksi yang masih tertahan di WAL.
     final db = ref.read(dbProvider);
+    await _checkpoint(db, mode: 'TRUNCATE');
     try {
       await db.close();
     } catch (_) {
       // Sudah tertutup — abaikan.
     }
 
-    // Timpa file DB. WAL/SHM sisa koneksi lama WAJIB dibuang — WAL lama
-    // yang masih berisi halaman database bisa diterapkan ke file backup
-    // yang baru dan mengkorupkan datanya.
     final dbFolder = await getApplicationDocumentsDirectory();
     final dbFile = File('${dbFolder.path}/myduit.sqlite');
+    // Snapshot data saat ini sebelum ditimpa — kalau salah pilih file,
+    // pengguna masih bisa pulih dari berkas ini.
+    snapshotCurrentDb(dbFolder);
+    // WAL/SHM sisa koneksi lama WAJIB dibuang — WAL lama yang masih berisi
+    // halaman database bisa diterapkan ke file backup yang baru dan
+    // mengkorupsi datanya.
     for (final suffix in ['-wal', '-shm']) {
       final sidecar = File('${dbFile.path}$suffix');
       if (sidecar.existsSync()) sidecar.deleteSync();
     }
-    // Snapshot data saat ini sebelum ditimpa — kalau salah pilih file,
-    // pengguna masih bisa pulih dari berkas ini.
-    snapshotCurrentDb(dbFolder);
     await dbFile.writeAsBytes(bytes, flush: true);
 
     // Buat koneksi baru
     ref.invalidate(dbProvider);
 
-    return true;
+    return (restored: true, error: null);
   }
 
   /// Salin DB saat ini ke `myduit_pre_restore_<stamp>.sqlite`, ganti snapshot
@@ -185,35 +211,36 @@ class BackupService {
     final accountMap = {for (final a in accounts) a.id: a.name};
 
     final buf = StringBuffer();
-    buf.writeln('Tanggal,Jenis,Jumlah,Wallet,Catatan');
+    buf.writeln('Tanggal,Jam,Jenis,Jumlah,Wallet,Catatan');
 
     for (final tx in txs) {
       final date = tx.date.substring(0, 10); // YYYY-MM-DD
+      final time = tx.date.length >= 16 ? tx.date.substring(11, 16) : '';
       final type = tx.type == 'income'
           ? 'Pemasukan'
           : tx.type == 'expense'
               ? 'Pengeluaran'
               : 'Transfer';
       final amount = tx.amount.toString();
-      final wallet = csvEscape(accountMap[tx.accountId] ?? tx.accountId);
+      // Transfer: tampilkan arah sumber → tujuan.
+      final walletName = tx.type == 'transfer'
+          ? '${accountMap[tx.accountId] ?? tx.accountId} → ${accountMap[tx.toAccountId] ?? tx.toAccountId ?? '?'}'
+          : accountMap[tx.accountId] ?? tx.accountId;
+      final wallet = csvEscape(walletName);
       final note = csvEscape(tx.note);
-      buf.writeln('$date,$type,$amount,$wallet,$note');
+      buf.writeln('$date,$time,$type,$amount,$wallet,$note');
     }
 
-    final now = DateTime.now();
-    final fileName =
-        'myduit-transaksi-${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}.csv';
+    // BOM UTF-8 agar catatan berbahasa Indonesia terbaca benar di Excel.
+    final bytes = utf8.encode('\uFEFF${buf.toString()}');
 
     final result = await FilePicker.platform.saveFile(
       dialogTitle: 'Ekspor transaksi MyDuit',
-      fileName: fileName,
+      fileName: 'myduit-transaksi-${_stamp()}.csv',
       type: FileType.custom,
       allowedExtensions: ['csv'],
+      bytes: bytes,
     );
-
-    if (result == null) return null;
-
-    await File(result).writeAsString(buf.toString(), flush: true);
     return result;
   }
 }

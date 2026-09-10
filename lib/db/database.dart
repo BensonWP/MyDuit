@@ -120,6 +120,16 @@ class ActiveBillRow {
   final bool paidThisMonth;
 }
 
+/// Snapshot untuk urungkan hapus transaksi (lihat captureTransactionUndo).
+typedef TransactionUndo = ({
+  Transaction tx,
+  List<BillPayment> payments,
+  Map<String, ({bool active, bool completed})> billStates,
+});
+
+/// Snapshot untuk urungkan hapus tagihan (lihat captureBillUndo).
+typedef BillUndo = ({Bill bill, List<BillPayment> payments});
+
 // ─── Database ──────────────────────────────────────────────────────
 
 @DriftDatabase(
@@ -352,6 +362,75 @@ class MyDuitDatabase extends _$MyDuitDatabase {
       }
 
       await (delete(transactions)..where((t) => t.id.equals(id))).go();
+    });
+  }
+
+  // ─── Undo hapus ────────────────────────────────────────────────
+
+  /// Ambil snapshot transaksi SEBELUM [deleteTransactionCascade]:
+  /// baris transaksi, baris bill_payments terkait, dan state
+  /// active/completed tagihan yang akan diubah cascade. Null bila
+  /// transaksi tidak ada.
+  Future<TransactionUndo?> captureTransactionUndo(String id) async {
+    final tx = await (select(transactions)..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (tx == null) return null;
+    final payments = await (select(billPayments)
+          ..where((p) => p.transactionId.equals(id)))
+        .get();
+    final billIds = payments.map((p) => p.billId).toSet();
+    final affectedBills = billIds.isEmpty
+        ? const <Bill>[]
+        : await (select(bills)..where((b) => b.id.isIn(billIds))).get();
+    return (
+      tx: tx,
+      payments: payments,
+      billStates: {
+        for (final b in affectedBills)
+          b.id: (active: b.active, completed: b.completed),
+      },
+    );
+  }
+
+  /// Urungkan hapus: kembalikan transaksi, pembayaran, dan state tagihan
+  /// persis seperti sebelum dihapus — dalam SATU transaksi DB.
+  Future<void> restoreTransactionUndo(TransactionUndo undo) {
+    return transaction(() async {
+      await into(transactions).insert(undo.tx);
+      for (final p in undo.payments) {
+        await into(billPayments).insert(p);
+      }
+      for (final e in undo.billStates.entries) {
+        await (update(bills)..where((b) => b.id.equals(e.key))).write(
+          BillsCompanion(
+            active: Value(e.value.active),
+            completed: Value(e.value.completed),
+          ),
+        );
+      }
+    });
+  }
+
+  /// Ambil snapshot tagihan + seluruh pembayarannya SEBELUM
+  /// [deleteBillCascade]. Null bila tagihan tidak ada.
+  Future<BillUndo?> captureBillUndo(String billId) async {
+    final bill = await (select(bills)..where((b) => b.id.equals(billId)))
+        .getSingleOrNull();
+    if (bill == null) return null;
+    final payments = await (select(billPayments)
+          ..where((p) => p.billId.equals(billId)))
+        .get();
+    return (bill: bill, payments: payments);
+  }
+
+  /// Urungkan hapus tagihan: kembalikan tagihan + riwayat pembayaran.
+  /// Gagal bila transaksi pembayarannya sudah dihapus terpisah (FK).
+  Future<void> restoreBillUndo(BillUndo undo) {
+    return transaction(() async {
+      await into(bills).insert(undo.bill);
+      for (final p in undo.payments) {
+        await into(billPayments).insert(p);
+      }
     });
   }
 

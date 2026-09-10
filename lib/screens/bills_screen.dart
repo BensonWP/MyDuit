@@ -613,9 +613,17 @@ class _BillSheetState extends ConsumerState<_BillSheet> {
           'Tagihan dan seluruh riwayat pembayarannya dihapus permanen. '
           'Transaksi yang sudah tercatat tidak terpengaruh.',
     );
-    if (!confirmed) return;
+    if (!confirmed || !mounted) return;
 
-    await ref.read(dbProvider).deleteBillCascade(widget.existing!.id);
+    final db = ref.read(dbProvider);
+    // Snapshot dulu agar bisa diurungkan lewat snackbar di layar sebelumnya.
+    final undo = await db.captureBillUndo(widget.existing!.id);
+    await db.deleteBillCascade(widget.existing!.id);
+    // Snackbar sebelum pop — context form sudah tidak valid setelahnya.
+    if (undo != null && mounted) {
+      showUndoBar(
+          context, 'Tagihan dihapus', () => db.restoreBillUndo(undo));
+    }
     if (mounted) Navigator.pop(context);
   }
 

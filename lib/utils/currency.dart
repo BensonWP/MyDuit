@@ -9,9 +9,18 @@ final _formatter = NumberFormat.currency(
 
 String formatRupiah(int amount) => _formatter.format(amount);
 
+/// Nominal ter-mask untuk mode privasi (mata aktif).
+String formatMasked() => 'Rp ••••••';
+
 String formatDate(String iso) {
   final d = DateTime.parse(iso);
   return DateFormat('dd MMM yyyy', 'id_ID').format(d);
+}
+
+/// Jam & menit dari tanggal ISO — "14:30".
+String formatTime(String iso) {
+  final d = DateTime.parse(iso);
+  return DateFormat('HH:mm').format(d);
 }
 
 String formatMonth(String iso) {

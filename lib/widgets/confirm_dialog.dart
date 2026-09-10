@@ -1,6 +1,40 @@
 import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 
+/// Snackbar "Urungkan" setelah hapus: [message] + aksi undo.
+/// [onUndo] dibungkus try/catch — kegagalan restore (mis. FK) tampil
+/// sebagai pesan error, bukan crash.
+void showUndoBar(
+  BuildContext context,
+  String message,
+  Future<void> Function() onUndo,
+) {
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(message),
+      duration: const Duration(seconds: 5),
+      behavior: SnackBarBehavior.floating,
+      action: SnackBarAction(
+        label: 'Urungkan',
+        onPressed: () async {
+          try {
+            await onUndo();
+          } catch (_) {
+            if (context.mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Gagal mengembalikan data'),
+                  behavior: SnackBarBehavior.floating,
+                ),
+              );
+            }
+          }
+        },
+      ),
+    ),
+  );
+}
+
 /// Dialog konfirmasi gaya SweetAlert: ikon lingkaran merah, judul,
 /// deskripsi, tombol Batal + Hapus. Return true bila pengguna lanjut.
 Future<bool> confirmDelete(

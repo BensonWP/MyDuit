@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
 
 /// Satu rangkaian pengeluaran & pemasukan (list sejajar, indeks = periode).
@@ -251,9 +252,25 @@ final trendMonthsProvider =
 /// (7 hari kalender terakhir).
 final trendDailyModeProvider = StateProvider<bool>((_) => false);
 
-/// Arus kartu tren Laporan & chart 7 hari Beranda:
-/// true = keluar (pengeluaran), false = masuk (pemasukan).
-final flowOutProvider = StateProvider<bool>((_) => true);
+/// Filter arus: true = keluar, false = masuk, null = OFF (semua).
+/// Klik segmen aktif lagi mematikan filter (lihat FlowToggle di Beranda).
+final flowOutProvider = StateProvider<bool?>((_) => true);
+
+// ─── Mode privasi (mata di Beranda) ────────────────────────────────
+
+const privacyModePrefKey = 'privacy_mode';
+
+/// true = nominal uang di Beranda disembunyikan. Nilai awal disematkan
+/// dari SharedPreferences di main.dart (overrideWith) agar frame pertama
+/// sudah benar.
+final privacyModeProvider = StateProvider<bool>((_) => false);
+
+/// Ubah status mata + persist antar restart app.
+Future<void> setPrivacyMode(WidgetRef ref, bool value) async {
+  ref.read(privacyModeProvider.notifier).state = value;
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setBool(privacyModePrefKey, value);
+}
 
 // ─── Mini chart 7 hari (Beranda) ───────────────────────────────────
 

@@ -7,9 +7,7 @@ import '../utils/category_color.dart';
 import '../utils/currency.dart';
 import '../theme/app_theme.dart';
 import '../screens/transaction_form_screen.dart';
-import 'confirm_dialog.dart';
-
-/// Kontainer yang mengecil saat ditekan (spring feedback).
+import 'confirm_dialog.dart';/// Kontainer yang mengecil saat ditekan (spring feedback).
 /// Dipakai lintas layar: beranda, riwayat, detail wallet.
 class Pressable extends StatefulWidget {
   const Pressable({super.key, required this.child, this.onTap, this.onLongPress});
@@ -54,12 +52,16 @@ class TransactionTile extends ConsumerWidget {
     required this.accountName,
     this.categoryName,
     this.index = 0,
+    this.hideAmount = false,
   });
 
   final Transaction transaction;
   final String accountName;
   final String? categoryName;
   final int index;
+
+  /// Mode privasi Beranda: nominal diganti mask.
+  final bool hideAmount;
 
   Color get _semanticColor {
     switch (transaction.type) {
@@ -125,8 +127,14 @@ class TransactionTile extends ConsumerWidget {
           description:
               'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
         );
-        if (confirmed && context.mounted) {
-          await ref.read(dbProvider).deleteTransactionCascade(transaction.id);
+        if (!confirmed || !context.mounted) return;
+        final db = ref.read(dbProvider);
+        // Snapshot dulu agar bisa diurungkan lewat snackbar.
+        final undo = await db.captureTransactionUndo(transaction.id);
+        await db.deleteTransactionCascade(transaction.id);
+        if (context.mounted && undo != null) {
+          showUndoBar(context, 'Transaksi dihapus',
+              () => db.restoreTransactionUndo(undo));
         }
       },
       child: Padding(
@@ -164,8 +172,8 @@ class TransactionTile extends ConsumerWidget {
                     ),
                     Text(
                       categoryName == null
-                          ? accountName
-                          : '$categoryName · $accountName',
+                          ? '$accountName · ${formatTime(transaction.date)}'
+                          : '$categoryName · $accountName · ${formatTime(transaction.date)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -175,7 +183,9 @@ class TransactionTile extends ConsumerWidget {
                 ),
               ),
               Text(
-                '$_amountPrefix${formatRupiah(transaction.amount)}',
+                hideAmount
+                    ? formatMasked()
+                    : '$_amountPrefix${formatRupiah(transaction.amount)}',
                 style: TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,

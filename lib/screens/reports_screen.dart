@@ -362,7 +362,8 @@ class _FlowTrendCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final daily = ref.watch(trendDailyModeProvider);
-    final out = ref.watch(flowOutProvider);
+    // Filter OFF (null) → tren default Keluar, sama dengan Beranda.
+    final out = ref.watch(flowOutProvider) ?? true;
     const color = D.cobalt;
     final month = ref.watch(reportMonthProvider);
     final reduced = MediaQuery.of(context).disableAnimations;

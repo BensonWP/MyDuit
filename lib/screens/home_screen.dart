@@ -26,10 +26,16 @@ class HomeScreen extends ConsumerWidget {
         ref.watch(accountBalanceProvider(a.id)).valueOrNull ?? 0;
     final sortedAccounts = [...accounts]..sort((a, b) => balanceOf(b).compareTo(balanceOf(a)));
     final today = DateTime.now();
-    // Semua transaksi hari ini (masuk/keluar/transfer), difilter SQL;
-    // to=besok karena date disimpan dengan jam.
+    // Semua transaksi hari ini, difilter SQL; to=besok karena date
+    // disimpan dengan jam. Filter arus ikut FlowToggle (null = semua).
+    final flowOut = ref.watch(flowOutProvider);
     final transactions = ref
             .watch(historyProvider(HistoryFilter(
+                type: flowOut == null
+                    ? null
+                    : flowOut
+                        ? 'expense'
+                        : 'income',
                 from: today.toIso8601String().substring(0, 10),
                 to: today.add(const Duration(days: 1)).toIso8601String().substring(0, 10))))
             .valueOrNull ??
@@ -38,6 +44,7 @@ class HomeScreen extends ConsumerWidget {
     final unpaidBills = ref.watch(unpaidBillsTotalProvider);
     final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
     final reducedMotion = MediaQuery.of(context).disableAnimations;
+    final privacy = ref.watch(privacyModeProvider);
     final catMap = <String, String>{
       for (final c
           in ref.watch(categoriesStreamProvider).valueOrNull ?? const [])
@@ -56,11 +63,12 @@ class HomeScreen extends ConsumerWidget {
               walletCount: accounts.length,
               unpaidBills: unpaidBills,
               animate: !reducedMotion,
+              privacy: privacy,
             ),
             const SizedBox(height: D.s6),
 
             // ── Tagihan belum dibayar ──
-            _UnpaidBillsCard(reducedMotion: reducedMotion),
+            _UnpaidBillsCard(reducedMotion: reducedMotion, privacy: privacy),
 
             if (accounts.isNotEmpty) ...[
               const SizedBox(height: D.s6),
@@ -77,6 +85,7 @@ class HomeScreen extends ConsumerWidget {
                     account: sortedAccounts[i],
                     index: i,
                     animate: !reducedMotion,
+                    privacy: privacy,
                   ),
                 ),
               ),
@@ -94,7 +103,7 @@ class HomeScreen extends ConsumerWidget {
                   itemCount: (plans.length > 3 ? 3 : plans.length) + 1,
                   separatorBuilder: (_, _) => const SizedBox(width: D.s3),
                   itemBuilder: (ctx, i) => i < 3 && i < plans.length
-                      ? _PlanChip(plan: plans[i])
+                      ? _PlanChip(plan: plans[i], privacy: privacy)
                       : const _PlanChip(plan: null),
                 ),
               ),
@@ -104,7 +113,7 @@ class HomeScreen extends ConsumerWidget {
             const SizedBox(height: D.s6),
             _SectionHeader(title: 'Arus 7 Hari', trailing: const FlowToggle()),
             const SizedBox(height: D.s3),
-            const _WeekBars(),
+            _WeekBars(privacy: privacy),
 
             // ── Transaksi hari ini ──
             const SizedBox(height: D.s6),
@@ -122,6 +131,7 @@ class HomeScreen extends ConsumerWidget {
                         '-',
                     categoryName:
                         tx.categoryId == null ? null : catMap[tx.categoryId],
+                    hideAmount: privacy,
                   )),
           ],
         ),
@@ -133,8 +143,9 @@ class HomeScreen extends ConsumerWidget {
 // ── Tagihan bulan terpilih di hero (yang lunas bulan itu hilang) ───
 
 class _UnpaidBillsCard extends ConsumerWidget {
-  const _UnpaidBillsCard({required this.reducedMotion});
+  const _UnpaidBillsCard({required this.reducedMotion, required this.privacy});
   final bool reducedMotion;
+  final bool privacy;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -163,6 +174,7 @@ class _UnpaidBillsCard extends ConsumerWidget {
             index: i,
             animate: !reducedMotion,
             payable: offset == 0,
+            privacy: privacy,
           ),
       ],
     );
@@ -176,6 +188,7 @@ class _UnpaidBillTile extends ConsumerStatefulWidget {
     required this.index,
     required this.animate,
     required this.payable,
+    required this.privacy,
   });
 
   final Bill bill;
@@ -185,6 +198,8 @@ class _UnpaidBillTile extends ConsumerStatefulWidget {
 
   /// false = bulan proyeksi: pratinjau saja, tanpa H-N dan tombol Bayar.
   final bool payable;
+
+  final bool privacy;
 
   @override
   ConsumerState<_UnpaidBillTile> createState() => _UnpaidBillTileState();
@@ -203,6 +218,8 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
     final walletBalance =
         ref.watch(accountBalanceProvider(bill.accountId)).valueOrNull;
     final short = walletBalance == null ? 0 : bill.amount - walletBalance;
+    final amountText =
+        widget.privacy ? formatMasked() : formatRupiah(bill.amount);
 
     return Container(
       margin: const EdgeInsets.only(bottom: D.s3),
@@ -236,7 +253,7 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
                         fontSize: 14, fontWeight: FontWeight.w700)),
                 Text('Tgl ${bill.dueDay} · ${widget.accountName}',
                     style: const TextStyle(fontSize: 11.5, color: D.inkMuted)),
-                if (short > 0)
+                if (!widget.privacy && short > 0)
                   Text('Kurang ${formatRupiah(short)}',
                       style: const TextStyle(
                           fontSize: 11.5,
@@ -249,7 +266,7 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              Text(formatRupiah(bill.amount),
+              Text(amountText,
                   style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w800,
@@ -314,14 +331,17 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
 // ── Mini bar 7 hari ────────────────────────────────────────────────
 
 class _WeekBars extends ConsumerWidget {
-  const _WeekBars();
+  const _WeekBars({required this.privacy});
+  final bool privacy;
 
   static const _dayInitials = ['Sn', 'Sl', 'Rb', 'Km', 'Jm', 'Sb', 'Mg'];
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final flow = ref.watch(last7DaysFlowProvider).valueOrNull;
-    final out = ref.watch(flowOutProvider);
+    // Filter OFF → chart default ke Keluar; daftar di bawah yang
+    // mengikuti pilihan OFF (semua).
+    final out = ref.watch(flowOutProvider) ?? true;
     final values = flow == null ? null : (out ? flow.expense : flow.income);
     final color = out ? D.cobalt : D.income;
     final now = DateTime.now();
@@ -357,7 +377,8 @@ class _WeekBars extends ConsumerWidget {
                       _FlowLegend(
                           color: color,
                           label: out ? 'Keluar' : 'Masuk',
-                          value: formatRupiah(total)),
+                          value:
+                              privacy ? formatMasked() : formatRupiah(total)),
                     const SizedBox(height: D.s3),
                     SizedBox(
                       height: 70,
@@ -435,8 +456,7 @@ class _WeekBar extends StatelessWidget {
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => showDayTransactionsSheet(context, day),
-      child: Column(
+      onTap: () => showDayTransactionsSheet(context, day),      child: Column(
         children: [
           Expanded(
             child: Align(
@@ -492,8 +512,11 @@ class _DayExpensesSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final out = ref.watch(flowOutProvider);
-    final txs = (ref.watch(dayTransactionsProvider(day)).valueOrNull ?? [])
-        .where((t) => out ? t.type == 'expense' : t.type == 'income')
+    final all = ref.watch(dayTransactionsProvider(day)).valueOrNull ?? [];
+    // Ikuti filter arus Beranda: null = tampil semua transaksi hari itu.
+    final txs = (out == null
+            ? all
+            : all.where((t) => out ? t.type == 'expense' : t.type == 'income'))
         .toList();
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
     final catMap = <String, String>{
@@ -529,9 +552,11 @@ class _DayExpensesSheet extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.all(D.s6),
             child: Text(
-                out
-                    ? 'Tidak ada pengeluaran hari ini'
-                    : 'Tidak ada pemasukan hari ini',
+                out == null
+                    ? 'Tidak ada transaksi hari ini'
+                    : out
+                        ? 'Tidak ada pengeluaran hari ini'
+                        : 'Tidak ada pemasukan hari ini',
                 style:
                     const TextStyle(fontSize: 13, color: D.inkMuted)),
           )
@@ -570,12 +595,14 @@ class _HeroCard extends ConsumerStatefulWidget {
     required this.walletCount,
     required this.unpaidBills,
     required this.animate,
+    required this.privacy,
   });
 
   final int? totalBalance;
   final int walletCount;
   final int unpaidBills;
   final bool animate;
+  final bool privacy;
 
   @override
   ConsumerState<_HeroCard> createState() => _HeroCardState();
@@ -671,6 +698,8 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
 
   Widget _balancePage() {
     final balance = widget.totalBalance ?? 0;
+    final privacy = widget.privacy;
+    String money(int v) => privacy ? formatMasked() : formatRupiah(v);
     final includePlans = ref.watch(includePlansInProjectionProvider);
     final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
     final plansTotal =
@@ -732,15 +761,40 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
                 ),
               ),
             ),
+            const SizedBox(width: D.s2),
+            // Mata privasi: sembunyikan nominal uang di Beranda.
+            GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setPrivacyMode(ref, !privacy),
+              child: Semantics(
+                label: privacy ? 'Tampilkan nominal' : 'Sembunyikan nominal',
+                button: true,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: D.s2, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(D.rSm),
+                  ),
+                  child: Icon(
+                    privacy
+                        ? Icons.visibility_off_rounded
+                        : Icons.visibility_rounded,
+                    size: 15,
+                    color: Colors.white70,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
         const SizedBox(height: D.s1),
         TweenAnimationBuilder<double>(
           tween: Tween(begin: 0, end: balance.toDouble()),
-          duration: widget.animate ? 900.ms : Duration.zero,
+          duration: widget.animate && !privacy ? 900.ms : Duration.zero,
           curve: Curves.easeOutCubic,
           builder: (_, value, _) => Text(
-            formatRupiah(value.round()),
+            money(value.round()),
             style: const TextStyle(
               color: Colors.white,
               fontSize: 34,
@@ -754,7 +808,7 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
           '${widget.walletCount} wallet terdaftar',
           style: const TextStyle(color: Colors.white60, fontSize: 12),
         ),
-        if (commitment > 0) ...[
+        if (commitment > 0 && !privacy) ...[
           const SizedBox(height: D.s1 + 2),
           Text(
             sisa < 0
@@ -778,6 +832,8 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
   Widget _projectionPage(int m) {
     final entries = ref.watch(activeBillsDetailedProvider).valueOrNull;
     final balance = widget.totalBalance;
+    final privacy = widget.privacy;
+    String money(int v) => privacy ? formatMasked() : formatRupiah(v);
     final includePlans = ref.watch(includePlansInProjectionProvider);
     final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
     final plansTotal =
@@ -809,7 +865,7 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
         Text(
           projection == null
               ? '…'
-              : formatRupiah(projection < 0 ? balance! : projection),
+              : money(projection < 0 ? balance! : projection),
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(
@@ -823,18 +879,20 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
         Text(
           entries == null
               ? 'Memuat tagihan…'
-              : 'Tagihan s/d $shortName: ${formatRupiah(through!)} · ${monthBills!.count} tagihan',
+              : privacy
+                  ? '${monthBills!.count} tagihan'
+                  : 'Tagihan s/d $shortName: ${formatRupiah(through!)} · ${monthBills!.count} tagihan',
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: Colors.white60, fontSize: 12),
         ),
-        if (includePlans && plansTotal > 0)
+        if (includePlans && plansTotal > 0 && !privacy)
           Padding(
             padding: const EdgeInsets.only(top: 2),
             child: Text('Rencana: ${formatRupiah(plansTotal)}',
                 style: const TextStyle(color: Colors.white60, fontSize: 12)),
           ),
-        if (projection != null && projection < 0) ...[
+        if (!privacy && projection != null && projection < 0) ...[
           const SizedBox(height: D.s1 + 2),
           Text(
             'Kurang ${formatRupiah(-projection)} untuk ${includePlans && plansTotal > 0 ? 'tagihan & rencana' : 'tagihan'}',
@@ -875,6 +933,7 @@ class _SectionHeader extends StatelessWidget {
 }
 
 /// Pilihan arus kartu tren (dipakai Beranda & Laporan).
+/// null = filter OFF — klik segmen aktif lagi untuk mematikan.
 class FlowToggle extends ConsumerWidget {
   const FlowToggle({super.key});
 
@@ -882,7 +941,8 @@ class FlowToggle extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final out = ref.watch(flowOutProvider);
     return SegmentedButton<bool>(
-      selected: {out},
+      selected: {if (out != null) out},
+      emptySelectionAllowed: true,
       showSelectedIcon: false,
       style: const ButtonStyle(
         visualDensity: VisualDensity.compact,
@@ -893,8 +953,9 @@ class FlowToggle extends ConsumerWidget {
         ButtonSegment(value: true, label: Text('Keluar')),
         ButtonSegment(value: false, label: Text('Masuk')),
       ],
+      // Segmen aktif diklik lagi → selection kosong → filter OFF.
       onSelectionChanged: (s) =>
-          ref.read(flowOutProvider.notifier).state = s.first,
+          ref.read(flowOutProvider.notifier).state = s.isEmpty ? null : s.first,
     );
   }
 }
@@ -906,11 +967,13 @@ class _WalletChip extends ConsumerWidget {
     required this.account,
     required this.index,
     required this.animate,
+    required this.privacy,
   });
 
   final Account account;
   final int index;
   final bool animate;
+  final bool privacy;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -943,7 +1006,7 @@ class _WalletChip extends ConsumerWidget {
               overflow: TextOverflow.ellipsis,
             ),
             Text(
-              formatRupiah(balance),
+              privacy ? formatMasked() : formatRupiah(balance),
               style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
             ),
           ],
@@ -959,8 +1022,9 @@ class _WalletChip extends ConsumerWidget {
 // ── Chip rencana di rail ──────────────────────────────────────────
 
 class _PlanChip extends ConsumerWidget {
-  const _PlanChip({required this.plan});
+  const _PlanChip({required this.plan, this.privacy = false});
   final Plan? plan;
+  final bool privacy;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1009,7 +1073,7 @@ class _PlanChip extends ConsumerWidget {
                 style: const TextStyle(
                     fontSize: 12.5, fontWeight: FontWeight.w600)),
             const Spacer(),
-            if (short != null)
+            if (!privacy && short != null)
               Text(
                 short > 0
                     ? 'Kurang ${formatRupiah(short)}'

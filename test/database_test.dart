@@ -586,6 +586,121 @@ void main() {
     expect(billsThroughMonth(entries, 1), 400000);
   });
 
+  test('undo transaksi: capture → hapus → restore kembalikan semua state',
+      () async {
+    final now = DateTime.now().toIso8601String();
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+          id: 'acc1', name: 'Cash', createdAt: now,
+        ));
+    // Cicilan 2× yang sudah lunas + transaksi biasa.
+    await db.into(db.bills).insert(BillsCompanion.insert(
+          id: 'bill1', name: 'HP', accountId: 'acc1',
+          amount: const Value(100000), durationMonths: const Value(2),
+          createdAt: now,
+        ));
+    await db.into(db.transactions).insert(TransactionsCompanion.insert(
+          id: 'tx-plain', accountId: 'acc1', type: const Value('expense'),
+          amount: const Value(9000), date: now,
+        ));
+    for (var i = 0; i < 2; i++) {
+      await db.into(db.transactions).insert(TransactionsCompanion.insert(
+            id: 'tx-pay$i', accountId: 'acc1',
+            type: const Value('expense'), amount: const Value(100000),
+            date: now,
+          ));
+      await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
+            id: 'pay$i', billId: 'bill1', transactionId: 'tx-pay$i',
+            paidAt: now,
+          ));
+    }
+    await (db.update(db.bills)..where((b) => b.id.equals('bill1'))).write(
+      const BillsCompanion(active: Value(false), completed: Value(true)),
+    );
+
+    // Undo transaksi pembayaran terakhir.
+    final undo = await db.captureTransactionUndo('tx-pay1');
+    expect(undo, isNotNull);
+    expect(undo!.payments.map((p) => p.id), ['pay1']);
+    expect(undo.billStates['bill1']!.active, isFalse);
+    expect(undo.billStates['bill1']!.completed, isTrue);
+
+    await db.deleteTransactionCascade('tx-pay1');
+    // Habis dari DB…
+    expect(
+        await (db.select(db.transactions)
+              ..where((t) => t.id.equals('tx-pay1')))
+            .getSingleOrNull(),
+        isNull);
+
+    // …lalu dikembalikan persis seperti semula.
+    await db.restoreTransactionUndo(undo);
+    final tx = await (db.select(db.transactions)
+          ..where((t) => t.id.equals('tx-pay1')))
+        .getSingle();
+    expect(tx.amount, 100000);
+    expect(
+        await (db.select(db.billPayments)
+              ..where((p) => p.id.equals('pay1')))
+            .getSingleOrNull(),
+        isNotNull);
+    final bill = await (db.select(db.bills)
+          ..where((b) => b.id.equals('bill1')))
+        .getSingle();
+    expect(bill.active, isFalse);
+    expect(bill.completed, isTrue);
+
+    // capture transaksi yang tidak ada → null.
+    expect(await db.captureTransactionUndo('nope'), isNull);
+  });
+
+  test('undo tagihan: capture → hapus → restore beserta pembayaran', () async {
+    final now = DateTime.now().toIso8601String();
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+          id: 'acc1', name: 'Cash', createdAt: now,
+        ));
+    await db.into(db.bills).insert(BillsCompanion.insert(
+          id: 'bill1', name: 'Listrik', accountId: 'acc1',
+          amount: const Value(15000), createdAt: now,
+        ));
+    await db.into(db.transactions).insert(TransactionsCompanion.insert(
+          id: 'tx-pay', accountId: 'acc1', type: const Value('expense'),
+          amount: const Value(15000), date: now,
+        ));
+    await db.into(db.billPayments).insert(BillPaymentsCompanion.insert(
+          id: 'pay1', billId: 'bill1', transactionId: 'tx-pay', paidAt: now,
+        ));
+
+    final undo = await db.captureBillUndo('bill1');
+    expect(undo, isNotNull);
+    expect(undo!.bill.name, 'Listrik');
+    expect(undo.payments.map((p) => p.id), ['pay1']);
+
+    await db.deleteBillCascade('bill1');
+    expect(
+        await (db.select(db.bills)..where((b) => b.id.equals('bill1')))
+            .getSingleOrNull(),
+        isNull);
+    expect(
+        await (db.select(db.billPayments)
+              ..where((p) => p.id.equals('pay1')))
+            .getSingleOrNull(),
+        isNull);
+
+    await db.restoreBillUndo(undo);
+    final bill = await (db.select(db.bills)
+          ..where((b) => b.id.equals('bill1')))
+        .getSingle();
+    expect(bill.amount, 15000);
+    expect(
+        await (db.select(db.billPayments)
+              ..where((p) => p.id.equals('pay1')))
+            .getSingleOrNull(),
+        isNotNull);
+
+    // capture tagihan yang tidak ada → null.
+    expect(await db.captureBillUndo('nope'), isNull);
+  });
+
   Transaction mkTx(String id, String type, int amount, String date) =>
       Transaction(
         id: id,

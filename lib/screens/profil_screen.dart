@@ -131,7 +131,7 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
               vertical: D.s3,
             ),
             child: Text(
-              'MyDuit v1.1.0',
+              'MyDuit v1.3.0',
               style: TextStyle(
                 fontSize: 14,
                 color: D.inkMuted,
@@ -145,11 +145,20 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
 
   Future<void> _doBackup(BuildContext context) async {
     final db = ref.read(dbProvider);
-    final path = await BackupService.backupToLocation(db);
+    String? path;
+    String? error;
+    try {
+      path = await BackupService.backupToLocation(db);
+    } on BackupException catch (e) {
+      error = e.message;
+    } catch (_) {
+      error = 'Gagal menyimpan backup';
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(path != null ? 'Backup tersimpan' : 'Backup dibatalkan'),
+        content: Text(
+            path != null ? 'Backup tersimpan' : (error ?? 'Backup dibatalkan')),
         duration: const Duration(seconds: 2),
       ),
     );
@@ -161,8 +170,8 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
       builder: (ctx) => AlertDialog(
         title: const Text('Pulihkan data?'),
         content: const Text(
-          'Semua data saat ini akan DIGANTikan dengan isi file backup. '
-          'Tindakan ini tidak bisa dibatalkan.',
+          'Semua data saat ini akan DIGANTI dengan isi file backup. '
+          'Salinan data sekarang otomatis dibuat untuk jaga-jaga.',
         ),
         actions: [
           TextButton(
@@ -182,25 +191,38 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
 
     if (confirm != true || !context.mounted) return;
 
-    final success = await BackupService.restoreFromFile(ref);
+    RestoreResult result;
+    try {
+      result = await BackupService.restoreFromFile(ref);
+    } catch (_) {
+      result = (restored: false, error: 'Gagal memulihkan data');
+    }
     if (!context.mounted) return;
+    final message = result.restored
+        ? 'Data berhasil dipulihkan'
+        : result.error ?? 'Pulihkan dibatalkan';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(success
-            ? 'Data berhasil dipulihkan'
-            : 'Pulihkan dibatalkan atau file tidak valid'),
-        duration: const Duration(seconds: 2),
+        content: Text(message),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
 
   Future<void> _doExportCsv(BuildContext context) async {
     final db = ref.read(dbProvider);
-    final path = await BackupService.exportCsv(db);
+    String? path;
+    String? error;
+    try {
+      path = await BackupService.exportCsv(db);
+    } catch (_) {
+      error = 'Gagal mengekspor CSV';
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(path != null ? 'CSV tersimpan' : 'Ekspor dibatalkan'),
+        content: Text(
+            path != null ? 'CSV tersimpan' : (error ?? 'Ekspor dibatalkan')),
         duration: const Duration(seconds: 2),
       ),
     );
