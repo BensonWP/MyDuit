@@ -4,6 +4,7 @@ import '../providers/database_provider.dart';
 import '../services/backup_service.dart';
 import '../services/lock_service.dart';
 import '../theme/app_theme.dart';
+import '../utils/app_info.dart';
 
 class ProfilScreen extends ConsumerStatefulWidget {
   const ProfilScreen({super.key});
@@ -72,12 +73,6 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
             subtitle: 'Timpa data saat ini dengan file cadangan',
             onTap: () => _doRestore(context),
           ),
-          _ActionTile(
-            icon: Icons.table_chart_outlined,
-            title: 'Ekspor CSV',
-            subtitle: 'Semua transaksi dalam format spreadsheet',
-            onTap: () => _doExportCsv(context),
-          ),
 
           // ── Keamanan ──
           const SizedBox(height: D.s6),
@@ -131,7 +126,7 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
               vertical: D.s3,
             ),
             child: Text(
-              'MyDuit v1.3.0',
+              'MyDuit v$appVersion',
               style: TextStyle(
                 fontSize: 14,
                 color: D.inkMuted,
@@ -205,25 +200,6 @@ class _ProfilScreenState extends ConsumerState<ProfilScreen> {
       SnackBar(
         content: Text(message),
         duration: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  Future<void> _doExportCsv(BuildContext context) async {
-    final db = ref.read(dbProvider);
-    String? path;
-    String? error;
-    try {
-      path = await BackupService.exportCsv(db);
-    } catch (_) {
-      error = 'Gagal mengekspor CSV';
-    }
-    if (!context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-            path != null ? 'CSV tersimpan' : (error ?? 'Ekspor dibatalkan')),
-        duration: const Duration(seconds: 2),
       ),
     );
   }

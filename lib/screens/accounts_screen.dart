@@ -62,16 +62,15 @@ class _WalletCard extends ConsumerWidget {
 
   Future<void> _deleteWallet(BuildContext context, WidgetRef ref) async {
     final db = ref.read(dbProvider);
-    final (txCount, billCount, planCount) = await db.accountUsage(account.id);
-    final hasContent = txCount > 0 || billCount > 0 || planCount > 0;
+    final (txCount, billCount) = await db.accountUsage(account.id);
+    final hasContent = txCount > 0 || billCount > 0;
 
     final confirmed = await confirmDelete(
       context,
       'Hapus ${account.name}?',
       description: hasContent
-          ? 'Wallet ini punya $txCount transaksi, $billCount tagihan, '
-              'dan $planCount rencana. Semua akan dihapus permanen dan '
-              'saldo dihitung ulang.'
+          ? 'Wallet ini punya $txCount transaksi dan $billCount tagihan. '
+              'Semua akan dihapus permanen dan saldo dihitung ulang.'
           : 'Wallet masih kosong dan bisa dihapus dengan aman.',
     );
     if (!confirmed) return;

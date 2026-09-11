@@ -41,20 +41,29 @@ class DonutChart extends StatelessWidget {
           painter:
               _DonutPainter(segments: segments, stroke: stroke, progress: t),
           child: Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(centerTitle,
-                    style: const TextStyle(
-                        fontSize: 11,
-                        color: D.inkMuted,
-                        fontWeight: FontWeight.w600)),
-                Text(centerValue,
-                    style: const TextStyle(
-                        fontSize: 14.5,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.3)),
-              ],
+            child: Padding(
+              padding: EdgeInsets.all(stroke * 0.9),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(centerTitle,
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: D.inkMuted,
+                          fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 2),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(centerValue,
+                        maxLines: 1,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            fontSize: 14.5,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.3)),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

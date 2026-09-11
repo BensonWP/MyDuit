@@ -89,4 +89,40 @@ void main() {
       await unmount(tester);
     }
   });
+
+  testWidgets('Tambah transaksi: expense melebihi saldo tampil pesan inline',
+      (tester) async {
+    try {
+      final now = DateTime.now().toIso8601String();
+      await db.into(db.accounts).insert(AccountsCompanion.insert(
+            id: 'acc1',
+            name: 'Cash',
+            createdAt: now,
+            initialBalance: const Value(200),
+          ));
+
+      await tester.pumpWidget(wrap(const TransactionForm()));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextFormField).first, '250');
+      await tester.tap(find.byIcon(Icons.arrow_drop_down).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cash').last);
+      await tester.pumpAndSettle();
+      // Pastikan tombol Simpan terlihat (scroll bila perlu).
+      await tester.ensureVisible(find.text('Simpan'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Simpan'));
+      await tester.pumpAndSettle();
+
+      // Sheet tidak tertutup, pesan inline tampil, DB tidak berubah.
+      expect(find.text('Simpan'), findsOneWidget);
+      expect(find.textContaining('tidak cukup'), findsOneWidget);
+      expect(find.textContaining('kurang'), findsOneWidget);
+      expect(await db.select(db.transactions).get(), isEmpty);
+      expect(await db.accountBalance('acc1'), 200);
+    } finally {
+      await unmount(tester);
+    }
+  });
 }

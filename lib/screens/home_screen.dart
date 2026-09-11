@@ -13,7 +13,6 @@ import '../theme/app_theme.dart';
 import '../widgets/transaction_tile.dart';
 import 'account_detail_screen.dart';
 import 'bills_screen.dart';
-import 'plans_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -25,7 +24,9 @@ class HomeScreen extends ConsumerWidget {
     int balanceOf(Account a) =>
         ref.watch(accountBalanceProvider(a.id)).valueOrNull ?? 0;
     final sortedAccounts = [...accounts]..sort((a, b) => balanceOf(b).compareTo(balanceOf(a)));
-    final today = DateTime.now();
+    // "Hari ini" dari ticker, bukan DateTime.now() — daftar Hari Ini
+    // tetap segar saat app dibiarkan menyala melewati tengah malam.
+    final today = ref.watch(todayProvider);
     // Semua transaksi hari ini, difilter SQL; to=besok karena date
     // disimpan dengan jam. Filter arus ikut FlowToggle (null = semua).
     final flowOut = ref.watch(flowOutProvider);
@@ -42,7 +43,6 @@ class HomeScreen extends ConsumerWidget {
         [];
     final totalBalance = ref.watch(totalBalanceProvider).valueOrNull;
     final unpaidBills = ref.watch(unpaidBillsTotalProvider);
-    final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
     final reducedMotion = MediaQuery.of(context).disableAnimations;
     final privacy = ref.watch(privacyModeProvider);
     final catMap = <String, String>{
@@ -91,27 +91,9 @@ class HomeScreen extends ConsumerWidget {
               ),
             ],
 
-            // ── Rail rencana (max 3 + Kelola) ──
-            if (plans.isNotEmpty) ...[
-              const SizedBox(height: D.s6),
-              const _SectionHeader(title: 'Rencana'),
-              const SizedBox(height: D.s3),
-              SizedBox(
-                height: 64,
-                child: ListView.separated(
-                  scrollDirection: Axis.horizontal,
-                  itemCount: (plans.length > 3 ? 3 : plans.length) + 1,
-                  separatorBuilder: (_, _) => const SizedBox(width: D.s3),
-                  itemBuilder: (ctx, i) => i < 3 && i < plans.length
-                      ? _PlanChip(plan: plans[i], privacy: privacy)
-                      : const _PlanChip(plan: null),
-                ),
-              ),
-            ],
-
-            // ── Arus 7 hari ──
+            // ── Ringkasan 7 hari ──
             const SizedBox(height: D.s6),
-            _SectionHeader(title: 'Arus 7 Hari', trailing: const FlowToggle()),
+            _SectionHeader(title: 'Ringkasan 7 Hari', trailing: const FlowToggle()),
             const SizedBox(height: D.s3),
             _WeekBars(privacy: privacy),
 
@@ -218,6 +200,11 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
     final walletBalance =
         ref.watch(accountBalanceProvider(bill.accountId)).valueOrNull;
     final short = walletBalance == null ? 0 : bill.amount - walletBalance;
+    final payments =
+        ref.watch(billPaymentsProvider(bill.id)).valueOrNull ?? [];
+    final paidFlag = payments.isNotEmpty &&
+        payments.first.paidAt.substring(0, 7) ==
+            DateTime.now().toIso8601String().substring(0, 7);
     final amountText =
         widget.privacy ? formatMasked() : formatRupiah(bill.amount);
 
@@ -253,6 +240,14 @@ class _UnpaidBillTileState extends ConsumerState<_UnpaidBillTile> {
                         fontSize: 14, fontWeight: FontWeight.w700)),
                 Text('Tgl ${bill.dueDay} · ${widget.accountName}',
                     style: const TextStyle(fontSize: 11.5, color: D.inkMuted)),
+                if (paidFlag && payments.isNotEmpty)
+                  Text(
+                    'Dibayar ${formatDate(payments.first.paidAt)} · ${formatTime(payments.first.paidAt)}',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: D.income,
+                        fontWeight: FontWeight.w600),
+                  ),
                 if (!widget.privacy && short > 0)
                   Text('Kurang ${formatRupiah(short)}',
                       style: const TextStyle(
@@ -339,11 +334,12 @@ class _WeekBars extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final flow = ref.watch(last7DaysFlowProvider).valueOrNull;
-    // Filter OFF → chart default ke Keluar; daftar di bawah yang
-    // mengikuti pilihan OFF (semua).
-    final out = ref.watch(flowOutProvider) ?? true;
-    final values = flow == null ? null : (out ? flow.expense : flow.income);
-    final color = out ? D.cobalt : D.income;
+    // Filter OFF → tampilkan stacked bar (keluar + masuk).
+    final out = ref.watch(flowOutProvider);
+    final stacked = out == null && flow != null;
+    final values =
+        flow == null ? null : (out == true ? flow.expense : flow.income);
+    final color = (out ?? true) ? D.cobalt : D.income;
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
     final reduced = MediaQuery.of(context).disableAnimations;
@@ -356,11 +352,19 @@ class _WeekBars extends ConsumerWidget {
         borderRadius: BorderRadius.circular(D.rMd),
         border: Border.all(color: D.line),
       ),
-      child: values == null
+      child: flow == null
           ? const SizedBox(height: 100)
           : Builder(builder: (context) {
-              final maxV = values.fold<int>(0, (a, b) => b > a ? b : a);
-              final total = values.fold<int>(0, (a, b) => a + b);
+              final maxV = stacked
+                  ? [
+                      ...flow.expense,
+                      ...flow.income,
+                    ].fold<int>(0, (a, b) => b > a ? b : a)
+                  : values!.fold<int>(0, (a, b) => b > a ? b : a);
+              final totalOut = flow.expense.fold<int>(0, (a, b) => a + b);
+              final totalIn = flow.income.fold<int>(0, (a, b) => a + b);
+              final totalSingle =
+                  stacked ? 0 : values!.fold<int>(0, (a, b) => a + b);
               return TweenAnimationBuilder<double>(
                 tween: Tween(begin: 0, end: 1),
                 duration:
@@ -369,34 +373,75 @@ class _WeekBars extends ConsumerWidget {
                 builder: (context, t, _) => Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    if (total == 0)
+                    if (stacked && totalOut == 0 && totalIn == 0)
                       const Text('Belum ada transaksi',
                           style:
                               TextStyle(fontSize: 12, color: D.inkMuted))
-                    else
+                    else if (!stacked && totalSingle == 0)
+                      const Text('Belum ada transaksi',
+                          style:
+                              TextStyle(fontSize: 12, color: D.inkMuted))
+                    else if (stacked) ...[
+                      Wrap(
+                        spacing: D.s4,
+                        runSpacing: D.s1,
+                        children: [
+                          _FlowLegend(
+                              color: D.cobalt,
+                              label: 'Keluar',
+                              value: privacy
+                                  ? formatMasked()
+                                  : formatRupiah(totalOut)),
+                          _FlowLegend(
+                              color: D.income,
+                              label: 'Masuk',
+                              value: privacy
+                                  ? formatMasked()
+                                  : formatRupiah(totalIn)),
+                        ],
+                      ),
+                    ] else
                       _FlowLegend(
                           color: color,
-                          label: out ? 'Keluar' : 'Masuk',
-                          value:
-                              privacy ? formatMasked() : formatRupiah(total)),
+                          label: out == true ? 'Keluar' : 'Masuk',
+                          value: privacy
+                              ? formatMasked()
+                              : formatRupiah(totalSingle)),
                     const SizedBox(height: D.s3),
                     SizedBox(
-                      height: 70,
+                      height: 84,
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           for (var i = 0; i < 7; i++)
                             Expanded(
-                              child: _WeekBar(
-                                value: (values[i] /
-                                        (maxV == 0 ? 1 : maxV)) *
-                                    t,
-                                color: color,
-                                isToday: i == 6,
-                                day: today.subtract(Duration(days: 6 - i)),
-                                label: _dayInitials[
-                                    today.subtract(Duration(days: 6 - i)).weekday - 1],
-                              ),
+                              child: stacked
+                                  ? _StackedWeekBar(
+                                      expense:
+                                          (flow.expense[i] / (maxV == 0 ? 1 : maxV)) *
+                                              t,
+                                      income:
+                                          (flow.income[i] / (maxV == 0 ? 1 : maxV)) *
+                                              t,
+                                      isToday: i == 6,
+                                      day: today.subtract(Duration(days: 6 - i)),
+                                      label: _dayInitials[today
+                                              .subtract(Duration(days: 6 - i))
+                                              .weekday -
+                                          1],
+                                    )
+                                  : _WeekBar(
+                                      value: (values![i] /
+                                              (maxV == 0 ? 1 : maxV)) *
+                                          t,
+                                      color: color,
+                                      isToday: i == 6,
+                                      day: today.subtract(Duration(days: 6 - i)),
+                                      label: _dayInitials[today
+                                              .subtract(Duration(days: 6 - i))
+                                              .weekday -
+                                          1],
+                                    ),
                             ),
                         ],
                       ),
@@ -419,6 +464,7 @@ class _FlowLegend extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Container(
           width: 8,
@@ -428,8 +474,13 @@ class _FlowLegend extends StatelessWidget {
         const SizedBox(width: D.s1 + 2),
         Text('$label ',
             style: const TextStyle(fontSize: 12, color: D.inkMuted)),
-        Text(value,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+        Flexible(
+          child: Text(value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w800)),
+        ),
       ],
     );
   }
@@ -453,26 +504,109 @@ class _WeekBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dim = isToday ? 1.0 : 0.28;
+    // Tinggi bar max 54px (84 - 6 spacing - ~24 label), minimum 4px
+    // agar bar tetap terlihat walau nilainya kecil.
+    final barHeight = value <= 0 ? 4.0 : (4.0 + 50.0 * value).clamp(4.0, 54.0);
 
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => showDayTransactionsSheet(context, day),      child: Column(
+      onTap: () => showDayTransactionsSheet(context, day),
+      child: Column(
         children: [
           Expanded(
             child: Align(
               alignment: Alignment.bottomCenter,
-              child: FractionallySizedBox(
-                heightFactor: value <= 0 ? 0.07 : 0.14 + 0.86 * value,
-                child: Container(
-                  width: 8,
-                  decoration: BoxDecoration(
-                    color: value <= 0
-                        ? D.line
-                        : color.withValues(alpha: dim),
-                    borderRadius: BorderRadius.circular(3),
-                  ),
+              child: Container(
+                width: 8,
+                height: barHeight,
+                decoration: BoxDecoration(
+                  color: value <= 0
+                      ? D.line
+                      : color.withValues(alpha: dim),
+                  borderRadius: BorderRadius.circular(3),
                 ),
               ),
+            ),
+          ),
+          const SizedBox(height: D.s1 + 2),
+          Text(label,
+              style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: isToday ? FontWeight.w800 : FontWeight.w500,
+                color: isToday ? D.cobalt : D.inkMuted,
+              )),
+        ],
+      ),
+    );
+  }
+}
+
+class _StackedWeekBar extends StatelessWidget {
+  const _StackedWeekBar({
+    required this.expense,
+    required this.income,
+    required this.isToday,
+    required this.label,
+    required this.day,
+  });
+
+  final double expense; // 0..1 relatif maxV global
+  final double income; // 0..1 relatif maxV global
+  final bool isToday;
+  final String label;
+  final DateTime day;
+
+  @override
+  Widget build(BuildContext context) {
+    final dim = isToday ? 1.0 : 0.28;
+    final sum = income + expense;
+    final ratio = sum > 0 ? 1 / sum : 0.0;
+    final barMax = 54.0;
+
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => showDayTransactionsSheet(context, day),
+      child: Column(
+        children: [
+          Expanded(
+            child: Align(
+              alignment: Alignment.bottomCenter,
+              child: sum <= 0
+                  ? Container(
+                      width: 8,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: D.line,
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    )
+                  : SizedBox(
+                      width: 8,
+                      height: barMax,
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          if (income > 0)
+                            Container(
+                              height: income * ratio * barMax,
+                              decoration: BoxDecoration(
+                                color: D.income.withValues(alpha: dim),
+                                borderRadius: const BorderRadius.vertical(
+                                    top: Radius.circular(3)),
+                              ),
+                            ),
+                          if (expense > 0)
+                            Container(
+                              height: expense * ratio * barMax,
+                              decoration: BoxDecoration(
+                                color: D.cobalt.withValues(alpha: dim),
+                                borderRadius: const BorderRadius.vertical(
+                                    bottom: Radius.circular(3)),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
             ),
           ),
           const SizedBox(height: D.s1 + 2),
@@ -700,14 +834,8 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
     final balance = widget.totalBalance ?? 0;
     final privacy = widget.privacy;
     String money(int v) => privacy ? formatMasked() : formatRupiah(v);
-    final includePlans = ref.watch(includePlansInProjectionProvider);
-    final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
-    final plansTotal =
-        includePlans ? plans.fold<int>(0, (a, p) => a + p.amount) : 0;
-    final commitment = widget.unpaidBills + plansTotal;
+    final commitment = widget.unpaidBills;
     final sisa = balance - commitment;
-    final commitLabel =
-        includePlans && plansTotal > 0 ? 'tagihan & rencana' : 'tagihan';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -726,42 +854,28 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
                     fontWeight: FontWeight.w600),
               ),
             ),
-            // Toggle Rencana: pill translusen, ikut dipakai halaman proyeksi.
-            GestureDetector(
-              onTap: () => ref
-                  .read(includePlansInProjectionProvider.notifier)
-                  .state = !includePlans,
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: D.s2, vertical: 3),
-                decoration: BoxDecoration(
-                  color: includePlans
-                      ? Colors.white.withValues(alpha: 0.22)
-                      : Colors.white.withValues(alpha: 0.08),
-                  borderRadius: BorderRadius.circular(D.rSm),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.flag_rounded,
-                        size: 12,
-                        color: includePlans
-                            ? Colors.white
-                            : Colors.white60),
-                    const SizedBox(width: 3),
-                    Text('Rencana',
-                        style: TextStyle(
-                          fontSize: 10.5,
-                          fontWeight: FontWeight.w700,
-                          color: includePlans
-                              ? Colors.white
-                              : Colors.white60,
-                        )),
-                  ],
+          ],
+        ),
+        const SizedBox(height: D.s1),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0, end: balance.toDouble()),
+                duration: widget.animate && !privacy ? 900.ms : Duration.zero,
+                curve: Curves.easeOutCubic,
+                builder: (_, value, _) => Text(
+                  money(value.round()),
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 34,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -1,
+                  ),
                 ),
               ),
             ),
-            const SizedBox(width: D.s2),
             // Mata privasi: sembunyikan nominal uang di Beranda.
             GestureDetector(
               behavior: HitTestBehavior.opaque,
@@ -770,38 +884,23 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
                 label: privacy ? 'Tampilkan nominal' : 'Sembunyikan nominal',
                 button: true,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: D.s2, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
                   decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.08),
+                    color: Colors.white.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(D.rSm),
                   ),
                   child: Icon(
                     privacy
                         ? Icons.visibility_off_rounded
                         : Icons.visibility_rounded,
-                    size: 15,
+                    size: 22,
                     color: Colors.white70,
                   ),
                 ),
               ),
             ),
           ],
-        ),
-        const SizedBox(height: D.s1),
-        TweenAnimationBuilder<double>(
-          tween: Tween(begin: 0, end: balance.toDouble()),
-          duration: widget.animate && !privacy ? 900.ms : Duration.zero,
-          curve: Curves.easeOutCubic,
-          builder: (_, value, _) => Text(
-            money(value.round()),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 34,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -1,
-            ),
-          ),
         ),
         const SizedBox(height: D.s2),
         Text(
@@ -812,8 +911,8 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
           const SizedBox(height: D.s1 + 2),
           Text(
             sisa < 0
-                ? 'Kurang ${formatRupiah(-sisa)} untuk $commitLabel'
-                : 'Setelah $commitLabel: ${formatRupiah(sisa)}',
+                ? 'Kurang ${formatRupiah(-sisa)} untuk tagihan'
+                : 'Setelah tagihan: ${formatRupiah(sisa)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
@@ -834,10 +933,6 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
     final balance = widget.totalBalance;
     final privacy = widget.privacy;
     String money(int v) => privacy ? formatMasked() : formatRupiah(v);
-    final includePlans = ref.watch(includePlansInProjectionProvider);
-    final plans = ref.watch(plansStreamProvider).valueOrNull ?? [];
-    final plansTotal =
-        includePlans ? plans.fold<int>(0, (a, p) => a + p.amount) : 0;
 
     final now = DateTime.now();
     final month = DateTime(now.year, now.month + m);
@@ -847,7 +942,7 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
     final through = entries == null ? null : billsThroughMonth(entries, m);
     final projection = balance == null || through == null
         ? null
-        : balance - through - plansTotal;
+        : balance - through;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -886,16 +981,10 @@ class _HeroCardState extends ConsumerState<_HeroCard> {
           overflow: TextOverflow.ellipsis,
           style: const TextStyle(color: Colors.white60, fontSize: 12),
         ),
-        if (includePlans && plansTotal > 0 && !privacy)
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text('Rencana: ${formatRupiah(plansTotal)}',
-                style: const TextStyle(color: Colors.white60, fontSize: 12)),
-          ),
         if (!privacy && projection != null && projection < 0) ...[
           const SizedBox(height: D.s1 + 2),
           Text(
-            'Kurang ${formatRupiah(-projection)} untuk ${includePlans && plansTotal > 0 ? 'tagihan & rencana' : 'tagihan'}',
+            'Kurang ${formatRupiah(-projection)} untuk tagihan',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
@@ -1015,80 +1104,6 @@ class _WalletChip extends ConsumerWidget {
           .animate(target: animate ? 1 : 0)
           .fade(duration: 300.ms, delay: (60 * index).ms)
           .slideY(begin: 0.2, end: 0, duration: 300.ms, delay: (60 * index).ms, curve: Curves.easeOutCubic),
-    );
-  }
-}
-
-// ── Chip rencana di rail ──────────────────────────────────────────
-
-class _PlanChip extends ConsumerWidget {
-  const _PlanChip({required this.plan, this.privacy = false});
-  final Plan? plan;
-  final bool privacy;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    void open() => Navigator.push(
-        context, MaterialPageRoute(builder: (_) => const PlansScreen()));
-
-    final p = plan;
-    if (p == null) {
-      return GestureDetector(
-        onTap: open,
-        child: Container(
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(horizontal: D.s4),
-          decoration: BoxDecoration(
-            color: D.surface,
-            borderRadius: BorderRadius.circular(D.rMd),
-            border: Border.all(color: D.line),
-          ),
-          child: const Text('Kelola →',
-              style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700)),
-        ),
-      );
-    }
-
-    final balance = p.accountId == null
-        ? ref.watch(totalBalanceProvider).valueOrNull
-        : ref.watch(accountBalanceProvider(p.accountId!)).valueOrNull;
-    final short = planShortfall(p, balance);
-
-    return GestureDetector(
-      onTap: open,
-      child: Container(
-        width: 150,
-        padding: const EdgeInsets.all(D.s3),
-        decoration: BoxDecoration(
-          color: D.card,
-          borderRadius: BorderRadius.circular(D.rMd),
-          border: Border.all(color: D.line),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(p.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w600)),
-            const Spacer(),
-            if (!privacy && short != null)
-              Text(
-                short > 0
-                    ? 'Kurang ${formatRupiah(short)}'
-                    : 'Siap! Sisa ${formatRupiah(-short)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: short > 0 ? D.expense : D.income,
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }

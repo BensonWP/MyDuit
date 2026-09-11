@@ -36,6 +36,11 @@ class Categories extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Index hot path: filter rentang tanggal (chart 7 hari, laporan) dan
+/// saldo per wallet. ponytail: FK child lain (bill_payments.bill_id,
+/// budgets.category_id) belum diindex — jumlah barisnya kecil.
+@TableIndex(name: 'idx_transactions_date', columns: {#date})
+@TableIndex(name: 'idx_transactions_account', columns: {#accountId})
 class Transactions extends Table {
   TextColumn get id => text()();
   TextColumn get accountId => text().references(Accounts, #id)();
@@ -92,19 +97,6 @@ class Budgets extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-class Plans extends Table {
-  TextColumn get id => text()();
-  TextColumn get name => text()();
-  IntColumn get amount => integer().withDefault(const Constant(0))();
-
-  /// null = dibandingkan total saldo semua wallet.
-  TextColumn get accountId => text().nullable().references(Accounts, #id)();
-  TextColumn get createdAt => text()();
-
-  @override
-  Set<Column> get primaryKey => {id};
-}
-
 /// Baris hasil watchActiveBillsDetailed — bukan tabel, hanya DTO query.
 /// Tagihan aktif + status bayar dari SATU query: daftar tagihan dan
 /// proyeksi tak bisa lagi melihat data beda frame.
@@ -130,6 +122,23 @@ typedef TransactionUndo = ({
 /// Snapshot untuk urungkan hapus tagihan (lihat captureBillUndo).
 typedef BillUndo = ({Bill bill, List<BillPayment> payments});
 
+/// Dilempar saat pengeluaran/bayar tagihan ditolak karena saldo wallet
+/// tidak cukup — wallet tidak boleh minus.
+class InsufficientBalanceException implements Exception {
+  const InsufficientBalanceException({
+    required this.accountId,
+    required this.balance,
+    required this.required,
+  });
+
+  final String accountId;
+  final int balance;
+  final int required;
+
+  /// Selisih kurangnya (selalu > 0).
+  int get short => required - balance;
+}
+
 // ─── Database ──────────────────────────────────────────────────────
 
 @DriftDatabase(
@@ -139,16 +148,19 @@ typedef BillUndo = ({Bill bill, List<BillPayment> payments});
   Transactions,
   Bills,
   BillPayments,
-  Budgets,
-  Plans
+  Budgets
 ])
 class MyDuitDatabase extends _$MyDuitDatabase {
   MyDuitDatabase() : super(_openConnection());
 
   MyDuitDatabase.testing() : super(NativeDatabase.memory());
 
+  /// Versi skema saat ini — juga dibaca BackupService untuk menolak
+  /// backup dari app yang lebih baru (lihat validateBackupFile).
+  static const int currentSchemaVersion = 8;
+
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => currentSchemaVersion;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -172,8 +184,13 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             await m.addColumn(bills, bills.durationMonths);
             await m.addColumn(bills, bills.completed);
           }
-          if (from < 6) {
-            await m.createTable(plans);
+          if (from < 7) {
+            await m.createIndex(idxTransactionsDate);
+            await m.createIndex(idxTransactionsAccount);
+          }
+          // v8: fitur Rencana dicabut — tabel dibuang, datanya hilang.
+          if (from < 8) {
+            await customStatement('DROP TABLE IF EXISTS plans');
           }
         },
         beforeOpen: (details) async {
@@ -224,8 +241,7 @@ class MyDuitDatabase extends _$MyDuitDatabase {
   Future<void> updateAccount(AccountsCompanion entry) => into(accounts).insertOnConflictUpdate(entry);
 
   /// Ringkasan pemakaian wallet — untuk dialog konfirmasi hapus.
-  Future<(int txCount, int billCount, int planCount)> accountUsage(
-      String accountId) async {
+  Future<(int txCount, int billCount)> accountUsage(String accountId) async {
     final txRow = await customSelect(
       'SELECT COUNT(*) AS c FROM transactions WHERE account_id = ?1 OR to_account_id = ?1',
       variables: [Variable.withString(accountId)],
@@ -236,21 +252,14 @@ class MyDuitDatabase extends _$MyDuitDatabase {
       variables: [Variable.withString(accountId)],
       readsFrom: {bills},
     ).getSingle();
-    final planRow = await customSelect(
-      'SELECT COUNT(*) AS c FROM plans WHERE account_id = ?1',
-      variables: [Variable.withString(accountId)],
-      readsFrom: {plans},
-    ).getSingle();
     return (
       txRow.data['c'] as int,
       billRow.data['c'] as int,
-      planRow.data['c'] as int,
     );
   }
 
-  /// Hapus wallet + seluruh jejaknya (transaksi, transfer, tagihan,
-  /// pembayaran, rencana terikat) dalam SATU transaksi DB —
-  /// urutan FK-aman.
+  /// Hapus wallet + seluruh jejaknya (transaksi, tagihan,
+  /// pembayaran) dalam SATU transaksi DB — urutan FK-aman.
   Future<void> deleteAccountCascade(String accountId) async {
     await transaction(() async {
       await customStatement(
@@ -259,14 +268,9 @@ class MyDuitDatabase extends _$MyDuitDatabase {
         [accountId],
       );
       await (delete(bills)..where((b) => b.accountId.equals(accountId))).go();
-      // Transfer keluar dari wallet lain juga menyinggung wallet ini.
+      // Kolom to_account_id hanya dipakai data transfer lama.
       await customStatement(
         'DELETE FROM transactions WHERE account_id = ?1 OR to_account_id = ?1',
-        [accountId],
-      );
-      // Rencana terikat wallet ikut terhapus (FK plans.account_id).
-      await customStatement(
-        'DELETE FROM plans WHERE account_id = ?1',
         [accountId],
       );
       await (delete(accounts)..where((a) => a.id.equals(accountId))).go();
@@ -316,7 +320,13 @@ class MyDuitDatabase extends _$MyDuitDatabase {
               exprs.add(t.categoryId.equals(categoryId));
             }
             if (search != null && search.isNotEmpty) {
-              exprs.add(t.note.like('%$search%'));
+              // Escape wildcard LIKE agar %/_ dicari sebagai karakter
+              // biasa, bukan pola.
+              final esc = search
+                  .replaceAll(r'\', r'\\')
+                  .replaceAll('%', r'\%')
+                  .replaceAll('_', r'\_');
+              exprs.add(t.note.like('%$esc%', escapeChar: r'\'));
             }
             if (from != null) exprs.add(t.date.isBiggerOrEqualValue(from));
             if (to != null) {
@@ -328,10 +338,88 @@ class MyDuitDatabase extends _$MyDuitDatabase {
         .watch();
   }
 
-  Future<void> insertTransaction(TransactionsCompanion entry) => into(transactions).insert(entry);
+  /// Efek satu transaksi terhadap saldo [accountId]:
+  /// expense keluar = -nominal, income = +nominal. Cabang transfer hanya
+  /// untuk data lama (UI transfer sudah dihapus): keluar = -nominal,
+  /// masuk = +nominal.
+  static int _balanceEffect({
+    required String accountId,
+    required String txAccountId,
+    required String? txToAccountId,
+    required String type,
+    required int amount,
+  }) {
+    if (txAccountId == accountId) {
+      return type == 'income' ? amount : -amount;
+    }
+    if (txToAccountId == accountId) return amount;
+    return 0;
+  }
 
-  Future<void> updateTransaction(TransactionsCompanion entry) =>
-      into(transactions).insertOnConflictUpdate(entry);
+  /// Pengeluaran baru: tolak bila saldo wallet kurang (tidak boleh minus).
+  /// Pemasukan selalu lolos.
+  Future<void> insertTransaction(TransactionsCompanion entry) async {
+    if (entry.type.value == 'expense') {
+      final balance = await accountBalance(entry.accountId.value);
+      if (balance < entry.amount.value) {
+        throw InsufficientBalanceException(
+          accountId: entry.accountId.value,
+          balance: balance,
+          required: entry.amount.value,
+        );
+      }
+    }
+    await into(transactions).insert(entry);
+  }
+
+  /// Edit transaksi: tolak bila hasil akhirnya bikin wallet mana pun
+  /// yang tersentuh jadi minus. Saldo saat ini sudah termasuk tx lama,
+  /// jadi kontribusi lama dikembalikan dulu sebelum menerapkan yang baru.
+  Future<void> updateTransaction(TransactionsCompanion entry) async {
+    final old = await (select(transactions)
+          ..where((t) => t.id.equals(entry.id.value)))
+        .getSingleOrNull();
+    if (old != null) {
+      final newType = entry.type.value;
+      final newAccountId = entry.accountId.value;
+      final newToAccountId = entry.toAccountId.value;
+      final newAmount = entry.amount.value;
+      final touched = {
+        old.accountId,
+        if (old.toAccountId != null) old.toAccountId!,
+        newAccountId,
+        if (newToAccountId != null) newToAccountId,
+      };
+      for (final accountId in touched) {
+        final balance = await accountBalance(accountId);
+        final oldEffect = _balanceEffect(
+          accountId: accountId,
+          txAccountId: old.accountId,
+          txToAccountId: old.toAccountId,
+          type: old.type,
+          amount: old.amount,
+        );
+        final newEffect = _balanceEffect(
+          accountId: accountId,
+          txAccountId: newAccountId,
+          txToAccountId: newToAccountId,
+          type: newType,
+          amount: newAmount,
+        );
+        final projected = balance - oldEffect + newEffect;
+        if (projected < 0) {
+          // Dana tersedia bila tx lama diabaikan; kurangnya = defisit akhir.
+          final available = balance - oldEffect;
+          throw InsufficientBalanceException(
+            accountId: accountId,
+            balance: available,
+            required: available - projected,
+          );
+        }
+      }
+    }
+    await into(transactions).insertOnConflictUpdate(entry);
+  }
 
   /// Hapus transaksi permanen secara ATOMIK. Bila transaksi ini adalah
   /// pembayaran tagihan (bill_payments.transaction_id → FK), baris
@@ -434,39 +522,26 @@ class MyDuitDatabase extends _$MyDuitDatabase {
     });
   }
 
+  /// Saldo satu wallet dalam SATU query SQL (sebelumnya 4 query
+  /// berurutan per wallet — hot path rail wallet di Beranda).
   Future<int> accountBalance(String accountId) async {
     final account = await (select(accounts)..where((a) => a.id.equals(accountId))).getSingleOrNull();
     if (account == null) return 0;
 
-    final incomeSum = await customSelect(
-      'SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE account_id = ?1 AND type = ?2',
-      variables: [Variable.withString(accountId), Variable.withString('income')],
+    final row = await customSelect(
+      '''
+      SELECT
+        COALESCE((SELECT SUM(amount) FROM transactions WHERE account_id = ?1 AND type = 'income'), 0)
+        - COALESCE((SELECT SUM(amount) FROM transactions WHERE account_id = ?1 AND type = 'expense'), 0)
+        + COALESCE((SELECT SUM(amount) FROM transactions WHERE to_account_id = ?1 AND type = 'transfer'), 0)
+        - COALESCE((SELECT SUM(amount) FROM transactions WHERE account_id = ?1 AND type = 'transfer'), 0)
+        AS total
+      ''',
+      variables: [Variable.withString(accountId)],
       readsFrom: {transactions},
-    ).getSingleOrNull();
+    ).getSingle();
 
-    final expenseSum = await customSelect(
-      'SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE account_id = ?1 AND type = ?2',
-      variables: [Variable.withString(accountId), Variable.withString('expense')],
-      readsFrom: {transactions},
-    ).getSingleOrNull();
-
-    final transferIn = await customSelect(
-      'SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE to_account_id = ?1 AND type = ?2',
-      variables: [Variable.withString(accountId), Variable.withString('transfer')],
-      readsFrom: {transactions},
-    ).getSingleOrNull();
-
-    final transferOut = await customSelect(
-      'SELECT COALESCE(SUM(amount), 0) AS total FROM transactions WHERE account_id = ?1 AND type = ?2',
-      variables: [Variable.withString(accountId), Variable.withString('transfer')],
-      readsFrom: {transactions},
-    ).getSingleOrNull();
-
-    return account.initialBalance +
-        (incomeSum?.data['total'] as int? ?? 0) -
-        (expenseSum?.data['total'] as int? ?? 0) +
-        (transferIn?.data['total'] as int? ?? 0) -
-        (transferOut?.data['total'] as int? ?? 0);
+    return account.initialBalance + (row.data['total'] as int);
   }
 
   /// Saldo gabungan semua wallet aktif dalam SATU query SQL.
@@ -548,7 +623,17 @@ class MyDuitDatabase extends _$MyDuitDatabase {
 
   /// Bayar tagihan secara ATOMIK: buat transaksi pengeluaran +
   /// catat ke bill_payments dalam satu database transaction.
+  /// Ditolak ([InsufficientBalanceException]) bila saldo wallet kurang —
+  /// wallet tidak boleh minus.
   Future<void> payBillWithTransaction(Bill bill) async {
+    final balance = await accountBalance(bill.accountId);
+    if (balance < bill.amount) {
+      throw InsufficientBalanceException(
+        accountId: bill.accountId,
+        balance: balance,
+        required: bill.amount,
+      );
+    }
     await transaction(() async {
       final now = DateTime.now();
       final txId = const Uuid().v4();
@@ -593,17 +678,6 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             ..where((bp) => bp.billId.equals(billId))
             ..orderBy([(bp) => OrderingTerm.desc(bp.paidAt)]))
           .watch();
-
-  // ─── Plan queries ──────────────────────────────────────────────
-
-  Stream<List<Plan>> watchPlans() =>
-      (select(plans)..orderBy([(p) => OrderingTerm.desc(p.createdAt)])).watch();
-
-  Future<void> upsertPlan(PlansCompanion entry) =>
-      into(plans).insertOnConflictUpdate(entry);
-
-  Future<void> deletePlan(String id) =>
-      (delete(plans)..where((p) => p.id.equals(id))).go();
 }
 
 LazyDatabase _openConnection() {

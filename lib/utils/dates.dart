@@ -13,3 +13,9 @@ int daysUntilDue(int dueDay, {DateTime? now}) {
   }
   return 0;
 }
+
+/// Tengah malam berikutnya dari [now] — dipakai midnightTickerProvider
+/// untuk bump "sekarang" saat app dibiarkan menyala melewati tengah malam.
+/// DateTime klem otomatis (day 32 → bulan berikutnya).
+DateTime nextMidnight(DateTime now) =>
+    DateTime(now.year, now.month, now.day + 1);

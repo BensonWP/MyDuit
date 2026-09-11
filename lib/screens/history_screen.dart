@@ -33,7 +33,6 @@ class HistoryTabState extends ConsumerState<HistoryTab> {
     (null, 'Semua'),
     ('expense', 'Pengeluaran'),
     ('income', 'Pemasukan'),
-    ('transfer', 'Transfer'),
   ];
 
   static const _timeLabels = {

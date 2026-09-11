@@ -48,33 +48,45 @@ class NotificationService {
   /// tanggal jatuh tempo. Dipanggil saat app dibuka dan tiap tagihan berubah.
   Future<void> rescheduleAll(List<Bill> bills) async {
     await init();
-    await _plugin.cancelAll();
+    try {
+      await _plugin.cancelAll();
 
-    final now = DateTime.now();
-    for (final bill in bills) {
-      final details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          'bill_reminders',
-          'Pengingat Tagihan',
-          channelDescription: 'Pengingat jatuh tempo tagihan rutin',
-          importance: Importance.high,
-          priority: Priority.high,
-          styleInformation: BigTextStyleInformation(''),
-        ),
-      );
+      final now = DateTime.now();
+      for (final bill in bills) {
+        final details = NotificationDetails(
+          android: AndroidNotificationDetails(
+            'bill_reminders',
+            'Pengingat Tagihan',
+            channelDescription: 'Pengingat jatuh tempo tagihan rutin',
+            importance: Importance.high,
+            priority: Priority.high,
+            styleInformation: BigTextStyleInformation(''),
+          ),
+        );
 
-      await _plugin.zonedSchedule(
-        // ID notifikasi 32-bit; hash tagihan supaya tiap tagihan unik.
-        bill.id.hashCode & 0x7FFFFFFF,
-        'Tagihan: ${bill.name}',
-        '${formatRupiah(bill.amount)} jatuh tempo tanggal ${bill.dueDay}.',
-        _nextDueDate(now, bill.dueDay),
-        details,
-        androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-        matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
-      );
+        await _plugin.zonedSchedule(
+          // ID notifikasi 32-bit, deterministik dari UUID tagihan (8 hex
+          // pertama) — jadwal tak saling menimpa. Fallback hash bila id
+          // bukan UUID.
+          _notificationId(bill.id),
+          'Tagihan: ${bill.name}',
+          '${formatRupiah(bill.amount)} jatuh tempo tanggal ${bill.dueDay}.',
+          _nextDueDate(now, bill.dueDay),
+          details,
+          androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
+          matchDateTimeComponents: DateTimeComponents.dayOfMonthAndTime,
+        );
+      }
+    } catch (_) {
+      // Gagal menjadwalkan (izin dicabut, alarm dibatasi sistem, dsb.)
+      // tidak boleh crash — rescheduleAll dipanggil ulang tiap perubahan
+      // tagihan dan tiap app dibuka, jadi akan mencoba sendiri.
     }
   }
+
+  static int _notificationId(String billId) =>
+      int.tryParse(billId.substring(0, 8), radix: 16) ??
+      billId.hashCode & 0x7FFFFFFF;
 
   /// Jatuh tempo berikutnya pukul 08:00, ketat di masa depan.
   /// Tgl 29–31 mengikuti panjang bulan (tgl 30 di Feb → 28/29),

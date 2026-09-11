@@ -49,10 +49,17 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
   final _noteController = TextEditingController();
   String _type = 'expense';
   String? _accountId;
-  String? _toAccountId;
   String? _categoryId;
   DateTime _date = DateTime.now();
   bool _isLoading = false;
+
+  /// Pesan inline saldo kurang — dipakai menggantikan Snackbar yang
+  /// tertutup modal bottom sheet pada mode Tambah.
+  String? _balanceError;
+
+  void _deny(String msg) {
+    if (mounted) setState(() => _balanceError = msg);
+  }
 
   bool get _isEditing => widget.existing != null;
 
@@ -63,7 +70,6 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
     if (tx != null) {
       _type = tx.type;
       _accountId = tx.accountId;
-      _toAccountId = tx.toAccountId;
       _categoryId = tx.categoryId;
       _date = DateTime.parse(tx.date);
       _amountController.text = tx.amount.toString();
@@ -80,40 +86,77 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
     super.dispose();
   }
 
+  String _walletName([String? id]) {
+    final accounts = ref.read(accountsStreamProvider).valueOrNull ?? [];
+    final target = id ?? _accountId;
+    return accounts.where((a) => a.id == target).firstOrNull?.name ??
+        'wallet';
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_accountId == null) {
       _snack('Pilih wallet terlebih dahulu');
       return;
     }
-    if (_type == 'transfer' && (_toAccountId == null || _toAccountId == _accountId)) {
-      _snack('Wallet asal dan tujuan harus berbeda');
-      return;
+
+    setState(() {
+      _isLoading = true;
+      _balanceError = null;
+    });
+    try {
+      final db = ref.read(dbProvider);
+      final amount = int.tryParse(parseCurrency(_amountController.text)) ?? 0;
+      final id = _isEditing ? widget.existing!.id : const Uuid().v4();
+
+      // Cegah saldo minus: cek cepat sebelum tulis DB (dana tersedia =
+      // saldo saat ini dikurangi kontribusi tx lama bila mode edit).
+      if (_type == 'expense') {
+        final balance = await db.accountBalance(_accountId!);
+        var available = balance;
+        final old = widget.existing;
+        if (old != null) {
+          if (old.accountId == _accountId) {
+            available += old.type == 'income' ? -old.amount : old.amount;
+          } else if (old.toAccountId == _accountId) {
+            available -= old.amount;
+          }
+        }
+        if (available < amount) {
+          _deny(
+              'Saldo ${_walletName()} tidak cukup · kurang ${formatRupiah(amount - available)}');
+          return;
+        }
+      }
+
+      final entry = TransactionsCompanion.insert(
+        id: id,
+        accountId: _accountId!,
+        categoryId: Value(_categoryId ?? 'cat_other'),
+        type: Value(_type),
+        amount: Value(amount),
+        note: Value(_noteController.text.trim()),
+        date: _date.toIso8601String(),
+      );
+
+      // Jaring pengaman: guard DB menolak bila hasil akhir bikin
+      // wallet mana pun minus (mis. pindah wallet atau race).
+      try {
+        if (_isEditing) {
+          await db.updateTransaction(entry);
+        } else {
+          await db.insertTransaction(entry);
+        }
+      } on InsufficientBalanceException catch (e) {
+        _deny(
+            'Saldo ${_walletName(e.accountId)} tidak cukup · kurang ${formatRupiah(e.short)}');
+        return;
+      }
+
+      if (mounted) Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
-
-    setState(() => _isLoading = true);
-    final db = ref.read(dbProvider);
-    final amount = int.tryParse(parseCurrency(_amountController.text)) ?? 0;
-    final id = _isEditing ? widget.existing!.id : const Uuid().v4();
-
-    final entry = TransactionsCompanion.insert(
-      id: id,
-      accountId: _accountId!,
-      categoryId: Value(_categoryId),
-      toAccountId: Value(_toAccountId),
-      type: Value(_type),
-      amount: Value(amount),
-      note: Value(_noteController.text.trim()),
-      date: _date.toIso8601String(),
-    );
-
-    if (_isEditing) {
-      await db.updateTransaction(entry);
-    } else {
-      await db.insertTransaction(entry);
-    }
-
-    if (mounted) Navigator.pop(context);
   }
 
   Future<void> _delete() async {
@@ -156,7 +199,7 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
             _type = v;
             // Kategori terikat jenis — buang nilai lama agar dropdown valid.
             _categoryId = null;
-            if (v != 'transfer') _toAccountId = null;
+            _balanceError = null;
           });
         },
       ),
@@ -171,6 +214,9 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
         keyboardType: TextInputType.number,
         inputFormatters: [CurrencyInputFormatter()],
         autofocus: !widget.inSheet && !_isEditing,
+        onChanged: (_) {
+          if (_balanceError != null) setState(() => _balanceError = null);
+        },
         style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
         validator: (v) {
           if (v == null || v.isEmpty) return 'Wajib diisi';
@@ -190,26 +236,11 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
             .toList(),
         onChanged: (v) => setState(() {
           _accountId = v;
-          // Wallet tujuan tak boleh sama dengan asal.
-          if (_toAccountId == v) _toAccountId = null;
+          _balanceError = null;
         }),
       ),
-      if (_type == 'transfer') ...[
-        const SizedBox(height: D.s3),
+      const SizedBox(height: D.s3),
       DropdownButtonFormField<String>(
-        value:
-            accounts.any((a) => a.id == _toAccountId) ? _toAccountId : null,
-        decoration: const InputDecoration(labelText: 'Ke Wallet'),
-        items: accounts
-            .where((a) => a.id != _accountId)
-            .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
-            .toList(),
-        onChanged: (v) => setState(() => _toAccountId = v),
-      ),
-      ],
-      if (_type != 'transfer') ...[
-        const SizedBox(height: D.s3),
-        DropdownButtonFormField<String>(
           value: filteredCategories.any((c) => c.id == _categoryId)
               ? _categoryId
               : null,
@@ -228,7 +259,6 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
               .toList(),
           onChanged: (v) => setState(() => _categoryId = v),
         ),
-      ],
       const SizedBox(height: D.s3),
       TextFormField(
         controller: _noteController,
@@ -277,6 +307,34 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
         },
       ),
       const SizedBox(height: D.s2),
+      if (_balanceError != null) ...[
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(D.s3),
+          decoration: BoxDecoration(
+            color: D.expense.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(D.rMd),
+            border: Border.all(color: D.expense.withValues(alpha: 0.4)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.error_outline_rounded,
+                  color: D.expense, size: 20),
+              const SizedBox(width: D.s2),
+              Expanded(
+                child: Text(
+                  _balanceError!,
+                  style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: D.expense),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: D.s2),
+      ],
       FilledButton(
         onPressed: _isLoading ? null : _save,
         child: _isLoading
@@ -349,7 +407,6 @@ class _TypeSelector extends StatelessWidget {
   static const _options = [
     ('expense', 'Pengeluaran'),
     ('income', 'Pemasukan'),
-    ('transfer', 'Transfer'),
   ];
 
   @override

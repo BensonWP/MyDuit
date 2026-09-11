@@ -9,7 +9,6 @@ import '../utils/currency.dart';
 import '../utils/dates.dart';
 import '../theme/app_theme.dart';
 import '../widgets/confirm_dialog.dart';
-import 'plans_screen.dart';
 
 /// Apakah tagihan ini sudah dibayar di bulan berjalan.
 bool paidThisMonth(List<BillPayment> payments) {
@@ -46,7 +45,17 @@ Future<void> confirmAndPayBill(
   if (confirmed != true) return;
 
   final db = ref.read(dbProvider);
-  await db.payBillWithTransaction(bill);
+  try {
+    await db.payBillWithTransaction(bill);
+  } on InsufficientBalanceException catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text(
+              'Saldo $accountName tidak cukup · kurang ${formatRupiah(e.short)}')),
+    );
+    return;
+  }
   if (!context.mounted) return;
   final messenger = ScaffoldMessenger.of(context);
   final fresh = await (db.select(db.bills)
@@ -66,115 +75,12 @@ class BillsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return DefaultTabController(
-      length: 2,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('Tagihan & Rencana'),
-          bottom: const TabBar(
-            tabs: [Tab(text: 'Tagihan'), Tab(text: 'Rencana')],
-          ),
-        ),
-        body: const TabBarView(
-          children: [_BillsTab(), PlansTab()],
-        ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () => showAddChoiceSheet(context),
-          child: const Icon(Icons.add_rounded),
-        ),
-      ),
-    );
-  }
-}
-
-/// Pilihan jenis tambahan: tagihan rutin atau rencana target.
-Future<void> showAddChoiceSheet(BuildContext context) {
-  Future<void> pick(Future<void> Function() open) async {
-    Navigator.pop(context);
-    await open();
-  }
-
-  return showModalBottomSheet(
-    context: context,
-    builder: (ctx) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(D.s4, D.s4, D.s4, D.s6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Tambah',
-                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-            const SizedBox(height: D.s4),
-            _AddChoiceTile(
-              icon: Icons.receipt_rounded,
-              iconColor: D.cobalt,
-              title: 'Tambah Tagihan',
-              subtitle: 'Cicilan atau langganan rutin',
-              onTap: () => pick(() => showBillSheet(context)),
-            ),
-            const SizedBox(height: D.s3),
-            _AddChoiceTile(
-              icon: Icons.flag_rounded,
-              iconColor: D.amber,
-              title: 'Tambah Rencana',
-              subtitle: 'Target belanja & tabungan',
-              onTap: () => pick(() => showPlanSheet(context)),
-            ),
-          ],
-        ),
-      ),
-    ),
-  );
-}
-
-class _AddChoiceTile extends StatelessWidget {
-  const _AddChoiceTile({
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: iconColor.withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(D.rSm + 2),
-            ),
-            child: Icon(icon, color: iconColor, size: 20),
-          ),
-          const SizedBox(width: D.s3),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text(subtitle,
-                    style: const TextStyle(fontSize: 12, color: D.inkMuted)),
-              ],
-            ),
-          ),
-          const Icon(Icons.chevron_right_rounded, color: D.inkMuted),
-        ],
+    return Scaffold(
+      appBar: AppBar(title: const Text('Tagihan')),
+      body: const _BillsTab(),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () => showBillSheet(context),
+        child: const Icon(Icons.add_rounded),
       ),
     );
   }
@@ -338,6 +244,14 @@ class _BillTileState extends ConsumerState<_BillTile> {
                     '${bill.durationMonths > 0 ? ' · ${paidCount.clamp(0, bill.durationMonths)}/${bill.durationMonths} dibayar' : ''}',
                     style: const TextStyle(fontSize: 12, color: D.inkMuted),
                   ),
+                  if (paidThisMonthFlag && payments.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'Dibayar ${formatDate(payments.first.paidAt)} · ${formatTime(payments.first.paidAt)}',
+                      style: const TextStyle(
+                          fontSize: 11, color: D.income, fontWeight: FontWeight.w600),
+                    ),
+                  ],
                   if (!paidThisMonthFlag && short > 0)
                     Text('Kurang ${formatRupiah(short)}',
                         style: const TextStyle(
@@ -443,13 +357,17 @@ class _BillTileState extends ConsumerState<_BillTile> {
 
 // ── Kartu tagihan lunas (histori) ──────────────────────────────────
 
-class _CompletedBillTile extends StatelessWidget {
+class _CompletedBillTile extends ConsumerWidget {
   const _CompletedBillTile({required this.bill, required this.accountName});
   final Bill bill;
   final String accountName;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final payments =
+        ref.watch(billPaymentsProvider(bill.id)).valueOrNull ?? [];
+    final lastPaid = payments.isNotEmpty ? payments.first.paidAt : null;
+
     return Container(
       margin: const EdgeInsets.only(bottom: D.s3),
       padding: const EdgeInsets.all(D.s4),
@@ -486,6 +404,16 @@ class _CompletedBillTile extends StatelessWidget {
                   '${bill.durationMonths}/${bill.durationMonths} dibayar · $accountName',
                   style: const TextStyle(fontSize: 12, color: D.inkMuted),
                 ),
+                if (lastPaid != null) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    'Selesai ${formatDate(lastPaid)} · ${formatTime(lastPaid)}',
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: D.income,
+                        fontWeight: FontWeight.w600),
+                  ),
+                ],
               ],
             ),
           ),

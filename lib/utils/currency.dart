@@ -12,6 +12,30 @@ String formatRupiah(int amount) => _formatter.format(amount);
 /// Nominal ter-mask untuk mode privasi (mata aktif).
 String formatMasked() => 'Rp ••••••';
 
+/// Format kompak untuk label sempit (chart): 850rb, 1,2jt, 3,5M.
+/// Nol → '' agar tidak memenuhi chart.
+String formatCompactId(int amount) {
+  if (amount <= 0) return '';
+  if (amount >= 1000000000) {
+    final v = amount / 1000000000;
+    return '${_trim(v)}M';
+  }
+  if (amount >= 1000000) {
+    final v = amount / 1000000;
+    return '${_trim(v)}jt';
+  }
+  if (amount >= 1000) {
+    final v = amount / 1000;
+    return '${_trim(v)}rb';
+  }
+  return '$amount';
+}
+
+String _trim(double v) {
+  final s = v.toStringAsFixed(v < 10 ? 1 : 0).replaceAll('.', ',');
+  return s.endsWith(',0') ? s.substring(0, s.length - 2) : s;
+}
+
 String formatDate(String iso) {
   final d = DateTime.parse(iso);
   return DateFormat('dd MMM yyyy', 'id_ID').format(d);

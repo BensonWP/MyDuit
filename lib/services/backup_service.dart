@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
@@ -101,6 +100,19 @@ class BackupService {
           return 'Tabel tidak lengkap: ${missing.join(', ')}';
         }
 
+        // Drift selalu mengisi user_version dengan versi skema. 0 = DB
+        // buatan lain; di atas skema app = backup dari versi lebih baru
+        // (drift akan gagal buka → app tampak kosong). Versi lebih lama
+        // lolos — migrasi otomatis saat dibuka.
+        final uv =
+            validated.select('PRAGMA user_version').first['user_version']
+                as int;
+        if (uv == 0) return 'Bukan backup MyDuit';
+        if (uv > MyDuitDatabase.currentSchemaVersion) {
+          return 'Backup dibuat dari versi MyDuit yang lebih baru — '
+              'perbarui aplikasi dulu';
+        }
+
         final integrity = validated.select('PRAGMA integrity_check');
         if (integrity.isNotEmpty &&
             integrity.first['integrity_check'] != 'ok') {
@@ -189,58 +201,5 @@ class BackupService {
     final snap = File('${folder.path}/myduit_pre_restore_$stamp.sqlite');
     dbFile.copySync(snap.path);
     return snap;
-  }
-
-  // ── CSV EXPORT ──────────────────────────────────────────────────
-
-  /// Escape nilai CSV: bungkus kutip jika ada koma/newline/kutip.
-  static String csvEscape(String value) {
-    if (value.contains(',') ||
-        value.contains('\n') ||
-        value.contains('"')) {
-      return '"${value.replaceAll('"', '""')}"';
-    }
-    return value;
-  }
-
-  /// Ekspor semua transaksi ke CSV, simpan via SAF.
-  /// Return: path file tersimpan, atau null jika batal.
-  static Future<String?> exportCsv(MyDuitDatabase db) async {
-    final txs = await db.watchTransactionsFiltered().first;
-    final accounts = await db.select(db.accounts).get();
-    final accountMap = {for (final a in accounts) a.id: a.name};
-
-    final buf = StringBuffer();
-    buf.writeln('Tanggal,Jam,Jenis,Jumlah,Wallet,Catatan');
-
-    for (final tx in txs) {
-      final date = tx.date.substring(0, 10); // YYYY-MM-DD
-      final time = tx.date.length >= 16 ? tx.date.substring(11, 16) : '';
-      final type = tx.type == 'income'
-          ? 'Pemasukan'
-          : tx.type == 'expense'
-              ? 'Pengeluaran'
-              : 'Transfer';
-      final amount = tx.amount.toString();
-      // Transfer: tampilkan arah sumber → tujuan.
-      final walletName = tx.type == 'transfer'
-          ? '${accountMap[tx.accountId] ?? tx.accountId} → ${accountMap[tx.toAccountId] ?? tx.toAccountId ?? '?'}'
-          : accountMap[tx.accountId] ?? tx.accountId;
-      final wallet = csvEscape(walletName);
-      final note = csvEscape(tx.note);
-      buf.writeln('$date,$time,$type,$amount,$wallet,$note');
-    }
-
-    // BOM UTF-8 agar catatan berbahasa Indonesia terbaca benar di Excel.
-    final bytes = utf8.encode('\uFEFF${buf.toString()}');
-
-    final result = await FilePicker.platform.saveFile(
-      dialogTitle: 'Ekspor transaksi MyDuit',
-      fileName: 'myduit-transaksi-${_stamp()}.csv',
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-      bytes: bytes,
-    );
-    return result;
   }
 }

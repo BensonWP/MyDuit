@@ -24,7 +24,6 @@ Cobalt dalam — biru yang dipilih user, dengan karakter lebih gelap & jenuh dar
 | Aksen CTA | `amber` | `#F5A524` — hanya di FAB "Tambah" |
 | Income (semantik angka) | `income` | `#0E9F6E` |
 | Expense (semantik angka) | `expense` | `#E02D3C` |
-| Transfer (semantik angka) | `transfer` | `#1A3A6B` |
 
 Aturan: 2 warna inti (cobalt + netral) + 1 aksen (amber, FAB saja). Hijau/merah **hanya** untuk angka transaksi & indikator semantik — bukan dekorasi. Tagihan jatuh tempo memakai warna semantik `expense`.
 
@@ -73,7 +72,7 @@ Reduced motion: semua animasi dimatikan bila `MediaQuery.disableAnimations` akti
 
 - **Hero saldo**: kartu cobaltDeep r24, label "Total Saldo" + angka w800 putih; jumlah wallet kecil di bawah.
 - **Kartu wallet**: warna identitas sebagai tint latar + ikon; nama & saldo. Grid 2 kolom di halaman Wallet, rail horizontal di Beranda.
-- **Baris transaksi**: lingkaran ikon berwarna KATEGORI (bg 12% alpha, ikon penuh) — warna dari palet tetap 12 hue via hash deterministik id (`lib/utils/category_color.dart`); transfer = cobalt, tanpa kategori = warna semantik. Subjudul "Kategori · Wallet". Angka kanan tetap semantik (+hijau/−merah/transfer tinta).
+- **Baris transaksi**: lingkaran ikon berwarna KATEGORI (bg 12% alpha, ikon penuh) — warna dari palet tetap 12 hue via hash deterministik id (`lib/utils/category_color.dart`); tanpa kategori = warna semantik. Subjudul "Kategori · Wallet". Angka kanan tetap semantik (+hijau/−merah).
 - **Tagihan**: daftar urut jatuh tempo terdekat; chip "H-3" merah / "H+2" abu menandai urgensi (informasi, bukan dekorasi). Kartu "Tagihan Berikutnya" tampil di Beranda.
 - **Form**: modal bottom sheet r24 + drag handle, muncul dari FAB.
 

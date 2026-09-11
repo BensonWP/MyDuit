@@ -67,8 +67,6 @@ class TransactionTile extends ConsumerWidget {
     switch (transaction.type) {
       case 'income':
         return D.income;
-      case 'transfer':
-        return D.cobalt;
       default:
         return D.expense;
     }
@@ -78,8 +76,6 @@ class TransactionTile extends ConsumerWidget {
     switch (transaction.type) {
       case 'income':
         return Icons.south_west_rounded;
-      case 'transfer':
-        return Icons.swap_horiz_rounded;
       default:
         return Icons.north_east_rounded;
     }
@@ -89,10 +85,8 @@ class TransactionTile extends ConsumerWidget {
     switch (transaction.type) {
       case 'income':
         return '+';
-      case 'expense':
-        return '−';
       default:
-        return '';
+        return '−';
     }
   }
 
@@ -100,8 +94,6 @@ class TransactionTile extends ConsumerWidget {
     switch (type) {
       case 'income':
         return 'Pemasukan';
-      case 'transfer':
-        return 'Transfer';
       default:
         return 'Pengeluaran';
     }
@@ -189,7 +181,7 @@ class TransactionTile extends ConsumerWidget {
                 style: TextStyle(
                   fontSize: 14.5,
                   fontWeight: FontWeight.w700,
-                  color: transaction.type == 'transfer' ? D.ink : color,
+                  color: color,
                 ),
               ),
             ],

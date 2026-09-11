@@ -147,6 +147,126 @@ void main() {
     expect(tx.note, 'Listrik');
   });
 
+  test('insertTransaction: expense melebihi saldo ditolak, income lolos',
+      () async {
+    const uuid = Uuid();
+    final now = DateTime.now().toIso8601String();
+
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc1',
+      name: 'Cash',
+      createdAt: now,
+      initialBalance: const Value(10000),
+    ));
+
+    // Income selalu lolos: 10000 + 5000 = 15000.
+    await db.insertTransaction(TransactionsCompanion.insert(
+      id: uuid.v4(),
+      accountId: 'acc1',
+      type: const Value('income'),
+      amount: const Value(5000),
+      date: now,
+    ));
+    expect(await db.accountBalance('acc1'), 15000);
+
+    // Expense pas-pasan lolos: 15000 - 15000 = 0.
+    await db.insertTransaction(TransactionsCompanion.insert(
+      id: uuid.v4(),
+      accountId: 'acc1',
+      type: const Value('expense'),
+      amount: const Value(15000),
+      date: now,
+    ));
+    expect(await db.accountBalance('acc1'), 0);
+
+    // Expense Rp1 saat saldo 0 ditolak — wallet tidak boleh minus.
+    await expectLater(
+      db.insertTransaction(TransactionsCompanion.insert(
+        id: uuid.v4(),
+        accountId: 'acc1',
+        type: const Value('expense'),
+        amount: const Value(1),
+        date: now,
+      )),
+      throwsA(isA<InsufficientBalanceException>()),
+    );
+    expect(await db.accountBalance('acc1'), 0);
+    expect((await db.select(db.transactions).get()).length, 2);
+  });
+
+  test('updateTransaction: edit yang bikin saldo minus ditolak', () async {
+    final now = DateTime.now().toIso8601String();
+
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc1',
+      name: 'Cash',
+      createdAt: now,
+      initialBalance: const Value(10000),
+    ));
+    await db.insertTransaction(TransactionsCompanion.insert(
+      id: 'tx1',
+      accountId: 'acc1',
+      type: const Value('expense'),
+      amount: const Value(4000),
+      date: now,
+    ));
+    expect(await db.accountBalance('acc1'), 6000);
+
+    // Naikkan jadi 20000 (saldo tersedia 10000) → ditolak.
+    await expectLater(
+      db.updateTransaction(TransactionsCompanion.insert(
+        id: 'tx1',
+        accountId: 'acc1',
+        type: const Value('expense'),
+        amount: const Value(20000),
+        date: now,
+      )),
+      throwsA(isA<InsufficientBalanceException>()),
+    );
+    expect(await db.accountBalance('acc1'), 6000);
+
+    // Turunkan jadi 2000 → lolos, saldo 8000.
+    await db.updateTransaction(TransactionsCompanion.insert(
+      id: 'tx1',
+      accountId: 'acc1',
+      type: const Value('expense'),
+      amount: const Value(2000),
+      date: now,
+    ));
+    expect(await db.accountBalance('acc1'), 8000);
+  });
+
+  test('payBillWithTransaction: saldo kurang ditolak secara atomik', () async {
+    final now = DateTime.now().toIso8601String();
+
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc1',
+      name: 'Cash',
+      createdAt: now,
+      initialBalance: const Value(10000),
+    ));
+    await db.into(db.bills).insert(BillsCompanion.insert(
+      id: 'bill1',
+      name: 'Listrik',
+      accountId: 'acc1',
+      amount: const Value(15000),
+      createdAt: now,
+    ));
+
+    final bill = await (db.select(db.bills)
+          ..where((b) => b.id.equals('bill1')))
+        .getSingle();
+    await expectLater(
+      db.payBillWithTransaction(bill),
+      throwsA(isA<InsufficientBalanceException>()),
+    );
+
+    // Atomik: tidak ada transaksi maupun pembayaran yang tercatat.
+    expect(await db.accountBalance('acc1'), 10000);
+    expect(await db.select(db.transactions).get(), isEmpty);
+    expect(await db.select(db.billPayments).get(), isEmpty);
+  });
+
   test('watchTransactionsFiltered: filter jenis + cari catatan di SQL', () async {
     const uuid = Uuid();
     final now = DateTime.now().toIso8601String();
@@ -185,6 +305,35 @@ void main() {
 
     final all = await db.watchTransactionsFiltered().first;
     expect(all.length, 2);
+  });
+
+  test('search: wildcard LIKE di-escape, %/_ dicari literal', () async {
+    final now = DateTime.now().toIso8601String();
+
+    await db.into(db.accounts).insert(AccountsCompanion.insert(
+      id: 'acc1',
+      name: 'Cash',
+      createdAt: now,
+    ));
+    Future<void> addTx(String id, String note) =>
+        db.into(db.transactions).insert(TransactionsCompanion.insert(
+              id: id,
+              accountId: 'acc1',
+              date: now,
+              note: Value(note),
+            ));
+    await addTx('tx1', 'bonus 100%');
+    await addTx('tx2', 'transfer_bca');
+
+    // '%' tanpa escape berarti "semua baris" — kini dicari literal.
+    final pct = await db.watchTransactionsFiltered(search: '%').first;
+    expect(pct.single.note, 'bonus 100%');
+
+    final underscore = await db.watchTransactionsFiltered(search: '_').first;
+    expect(underscore.single.note, 'transfer_bca');
+
+    final bonus = await db.watchTransactionsFiltered(search: 'bonus').first;
+    expect(bonus.single.note, 'bonus 100%');
   });
 
   test('cicilan lunas: pembayaran ke-N nonaktif+completed, durasi 0 tetap aktif',
@@ -265,25 +414,13 @@ void main() {
       amount: const Value(2000), date: now,
     ));
 
-    final (txCount, billCount, planCount) = await db.accountUsage('acc1');
+    final (txCount, billCount) = await db.accountUsage('acc1');
     expect(txCount, 2); // tx-pay + tx-transfer
     expect(billCount, 1);
-    expect(planCount, 0);
-
-    // Rencana terikat acc1 ikut terhapus oleh cascade.
-    await db.into(db.plans).insert(PlansCompanion.insert(
-      id: 'plan1', name: 'Laptop', createdAt: now,
-    ));
-    await db.into(db.plans).insert(PlansCompanion.insert(
-      id: 'plan2', name: 'Liburan', amount: const Value(5000), createdAt: now,
-    ));
-    await db.customStatement(
-      "UPDATE plans SET account_id = 'acc1' WHERE id = 'plan1'",
-    );
 
     await db.deleteAccountCascade('acc1');
 
-    expect(await db.accountUsage('acc1'), (0, 0, 0));
+    expect(await db.accountUsage('acc1'), (0, 0));
     // Semua baris terkait acc1 lenyap…
     expect(
         await (db.select(db.transactions)
@@ -302,9 +439,6 @@ void main() {
         await (db.select(db.accounts)..where((a) => a.id.equals('acc1')))
             .get(),
         isEmpty);
-    // Rencana terikat acc1 hilang, rencana bebas tetap ada.
-    final plans = await (db.select(db.plans)).get();
-    expect(plans.map((p) => p.id), ['plan2']);
     // …dan acc2 kehilangan hanya transfer-nya, transaksi miliknya utuh.
     final acc2Txs = await (db.select(db.transactions)
           ..where((t) => t.accountId.equals('acc2')))
@@ -439,41 +573,6 @@ void main() {
     expect(due(1), ['b1', 'b3']);
     // Listrik langganan → terus muncul; cicilan HP tetap habis.
     expect(due(2), ['b1', 'b3']);
-  });
-
-  test('plans: insert → upsert → delete', () async {
-    final now = DateTime.now().toIso8601String();
-    await db.into(db.accounts).insert(AccountsCompanion.insert(
-          id: 'acc1',
-          name: 'Cash',
-          createdAt: now,
-        ));
-
-    await db.upsertPlan(PlansCompanion.insert(
-      id: 'p1',
-      name: 'Laptop',
-      amount: const Value(15000000),
-      createdAt: now,
-    ));
-    var plans = await db.watchPlans().first;
-    expect(plans.length, 1);
-    expect(plans.first.accountId, isNull); // default = semua wallet
-
-    // Id sama → update, bukan duplikat.
-    await db.upsertPlan(PlansCompanion.insert(
-      id: 'p1',
-      name: 'Laptop gaming',
-      amount: const Value(20000000),
-      accountId: const Value('acc1'),
-      createdAt: now,
-    ));
-    plans = await db.watchPlans().first;
-    expect(plans.length, 1);
-    expect(plans.first.name, 'Laptop gaming');
-    expect(plans.first.accountId, 'acc1');
-
-    await db.deletePlan('p1');
-    expect(await db.watchPlans().first, isEmpty);
   });
 
   test('7 hari: transaksi hari ini (dengan jam) hanya masuk saat to=besok',

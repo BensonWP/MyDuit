@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
+import '../utils/dates.dart';
 
 /// Satu rangkaian pengeluaran & pemasukan (list sejajar, indeks = periode).
 typedef MonthFlow = ({List<int> expense, List<int> income});
@@ -10,6 +13,41 @@ final dbProvider = Provider<MyDuitDatabase>((ref) {
   ref.onDispose(() => db.close());
   return db;
 });
+
+// ─── Waktu berjalan (app melewati tengah malam) ────────────────────
+
+/// "Sekarang" untuk app yang dibiarkan menyala: di-bump tiap tengah
+/// malam via rantai Timer. Nilai harian/bulanan (status tagihan
+/// sudah-dibayar, daftar Hari Ini, chart 7 hari) mengambil dari sini,
+/// bukan DateTime.now(), agar tidak basi setelah lewat tengah malam.
+class _MidnightTicker extends Notifier<DateTime> {
+  Timer? _timer;
+  @override
+  DateTime build() {
+    _schedule();
+    ref.onDispose(() => _timer?.cancel());
+    return DateTime.now();
+  }
+
+  void _schedule() {
+    final now = DateTime.now();
+    _timer = Timer(nextMidnight(now).difference(now), () {
+      state = DateTime.now();
+      _schedule();
+    });
+  }
+}
+
+final midnightTickerProvider =
+    NotifierProvider<_MidnightTicker, DateTime>(_MidnightTicker.new);
+
+/// Tanggal/jam saat ticker terakhir bump — alias semantik konsumen UI.
+final todayProvider =
+    Provider<DateTime>((ref) => ref.watch(midnightTickerProvider));
+
+/// Kunci bulan berjalan (YYYY-MM) dari ticker.
+final currentMonthProvider = Provider<String>((ref) =>
+    ref.watch(midnightTickerProvider).toIso8601String().substring(0, 7));
 
 // ─── Account providers ────────────────────────────────────────────
 
@@ -78,8 +116,12 @@ final historyProvider =
 
 /// Satu-satunya sumber data tagihan aktif. Daftar tagihan dan proyeksi
 /// di-derive dari stream yang sama → tak bisa lagi beda frame antar konsumen.
-final activeBillsDetailedProvider = StreamProvider<List<ActiveBillRow>>(
-    (ref) => ref.watch(dbProvider).watchActiveBillsDetailed());
+/// Watch currentMonthProvider: stream dibuat ulang saat ganti bulan
+/// (watchActiveBillsDetailed mengikat monthKey saat stream dibuat).
+final activeBillsDetailedProvider = StreamProvider<List<ActiveBillRow>>((ref) {
+  ref.watch(currentMonthProvider);
+  return ref.watch(dbProvider).watchActiveBillsDetailed();
+});
 
 final activeBillsProvider = Provider<List<Bill>>((ref) {
   final rows = ref.watch(activeBillsDetailedProvider).valueOrNull ?? const [];
@@ -97,17 +139,7 @@ final unpaidBillsTotalProvider = Provider<int>((ref) {
   return billsForMonth(rows, 0).total;
 });
 
-// ─── Plan providers ───────────────────────────────────────────────
-
-/// Target belanja ("Rencana") — urut terbaru.
-final plansStreamProvider = StreamProvider<List<Plan>>((ref) {
-  return ref.watch(dbProvider).watchPlans();
-});
-
 // ─── Proyeksi saldo (Beranda) ──────────────────────────────────────
-
-/// Toggle kartu Proyeksi: ikut kurangkan total Rencana.
-final includePlansInProjectionProvider = StateProvider<bool>((_) => false);
 
 /// Bulan yang sedang dibuka di kartu hero Beranda (0 = bulan ini,
 /// 1–12 = proyeksi). Bagian Tagihan ikut mengikuti nilai ini.
@@ -212,7 +244,8 @@ final monthTransactionsProvider = StreamProvider.autoDispose
 
 /// Bucket pengeluaran & pemasukan 6 bulan yang berakhir di [anchor]
 /// (indeks 5). Fungsi murni — transaksi sudah difilter ke rentang tepat.
-/// Transfer diabaikan (bukan arus kas masuk/keluar riil).
+/// Hanya expense/income; tipe lain (mis. data transfer lama)
+/// dikecualikan dari arus kas.
 MonthFlow monthTrendBuckets(List<Transaction> txs, DateTime anchor) {
   final first = DateTime(anchor.year, anchor.month - 5);
   final expense = List.filled(6, 0);
@@ -275,7 +308,8 @@ Future<void> setPrivacyMode(WidgetRef ref, bool value) async {
 // ─── Mini chart 7 hari (Beranda) ───────────────────────────────────
 
 /// Transaksi pemasukan & pengeluaran pada satu hari tertentu — dipakai
-/// sheet tap-bar chart 7 hari (Beranda & Laporan). Transfer dikecualikan.
+/// sheet tap-bar chart 7 hari (Beranda & Laporan). Tipe selain
+/// expense/income (mis. data transfer lama) dikecualikan.
 final dayTransactionsProvider = FutureProvider.autoDispose
     .family<List<Transaction>, DateTime>((ref, day) async {
   ref.watch(recentTransactionsProvider); // recompute saat data berubah
@@ -296,7 +330,9 @@ final last7DaysFlowProvider =
     FutureProvider.autoDispose<MonthFlow>((ref) async {
   ref.watch(recentTransactionsProvider); // recompute saat data berubah
   final db = ref.watch(dbProvider);
-  final now = DateTime.now();
+  // todayProvider juga dipakai sebagai pemicu: chart ikut bergeser
+  // saat app melewati tengah malam.
+  final now = ref.watch(todayProvider);
   final today = DateTime(now.year, now.month, now.day);
   final from = today.subtract(const Duration(days: 6))
       .toIso8601String()

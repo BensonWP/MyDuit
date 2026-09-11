@@ -38,6 +38,14 @@ class ReportsScreen extends StatelessWidget {
   }
 }
 
+/// Agregat per kategori di tab Ringkasan: total nominal + jumlah transaksi.
+class _CategoryRow {
+  const _CategoryRow({required this.id, required this.total, required this.count});
+  final String id;
+  final int total;
+  final int count;
+}
+
 class _ReportsSummaryTab extends ConsumerWidget {
   const _ReportsSummaryTab();
 
@@ -65,28 +73,29 @@ class _ReportsSummaryTab extends ConsumerWidget {
     final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
 
     // Hitung di Dart — data sebulan kecil, SQL tambahan tak diperlukan.
-    int income = 0, expense = 0;
+    int income = 0, expense = 0, incomeCount = 0, expenseCount = 0;
     final byCategory = <String, int>{};
-    final incomeByCategory = <String, int>{};
+    final byCategoryCount = <String, int>{};
     for (final tx in txs) {
       if (tx.type == 'income') {
         income += tx.amount;
-        if (tx.categoryId != null) {
-          incomeByCategory[tx.categoryId!] =
-              (incomeByCategory[tx.categoryId!] ?? 0) + tx.amount;
-        }
+        incomeCount++;
       } else if (tx.type == 'expense') {
         expense += tx.amount;
+        expenseCount++;
         if (tx.categoryId != null) {
           byCategory[tx.categoryId!] = (byCategory[tx.categoryId!] ?? 0) + tx.amount;
+          byCategoryCount[tx.categoryId!] =
+              (byCategoryCount[tx.categoryId!] ?? 0) + 1;
         }
       }
     }
 
-    final rows = byCategory.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final incomeRows = incomeByCategory.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
+    final rows = byCategory.entries
+        .map((e) => _CategoryRow(
+            id: e.key, total: e.value, count: byCategoryCount[e.key] ?? 0))
+        .toList()
+      ..sort((a, b) => b.total.compareTo(a.total));
 
     final catName = <String, Category>{
       for (final c in categories) c.id: c,
@@ -107,157 +116,54 @@ class _ReportsSummaryTab extends ConsumerWidget {
           _MonthSwitcher(month: month),
           const SizedBox(height: D.s4),
 
-          // ── Hierarki ringkasan: Keluar = metrik utama ──
-          // IntrinsicHeight: ListView memberi tinggi tak terbatas —
-          // tanpa ini, Column ber-Expanded di dalam Row akan crash.
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  flex: 3,
-                  child: _BigStatCard(
-                    label: 'Total Keluar',
-                    value: formatRupiah(expense),
-                    sub: _expenseDeltaText(expense, prevExpense, prevMonth),
-                  ),
+          // ── Hierarki ringkasan: Keluar = metrik utama (full-width),
+          // Masuk + Selisih sejajar di bawahnya (layout B).
+          _BigStatCard(
+            label: 'Total Keluar',
+            value: formatRupiah(expense),
+            sub: expenseCount > 0
+                ? '$expenseCount transaksi • ${_expenseDeltaText(expense, prevExpense, prevMonth)}'
+                : _expenseDeltaText(expense, prevExpense, prevMonth),
+          ),
+          const SizedBox(height: D.s3),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: _StatCard(
+                  label: 'Masuk',
+                  value: formatRupiah(income),
+                  sub: '$incomeCount transaksi',
+                  color: D.income,
+                  icon: Icons.south_west_rounded,
                 ),
-                const SizedBox(width: D.s3),
-                Expanded(
-                  flex: 2,
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: _StatCard(
-                            label: 'Masuk',
-                            value: formatRupiah(income),
-                            color: D.income),
-                      ),
-                      const SizedBox(height: D.s3),
-                      Expanded(
-                        child: _StatCard(
-                            label: 'Selisih',
-                            value: formatRupiah(income - expense),
-                            color:
-                                income - expense >= 0 ? D.cobalt : D.expense),
-                      ),
-                    ],
-                  ),
+              ),
+              const SizedBox(width: D.s3),
+              Expanded(
+                child: _StatCard(
+                  label: 'Selisih',
+                  value:
+                      '${income - expense < 0 ? '-' : '+'}${formatRupiah((income - expense).abs())}',
+                  sub: 'Masuk - Keluar',
+                  color: income - expense >= 0 ? D.cobalt : D.expense,
+                  icon: Icons.swap_horiz_rounded,
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
           const SizedBox(height: D.s6),
 
-          // ── Donut pengeluaran per kategori + legenda ──
-          const Text('Pengeluaran per Kategori',
-              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-          const SizedBox(height: D.s3),
-          if (rows.isEmpty)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(D.s6),
-              decoration: BoxDecoration(
-                color: D.card,
-                borderRadius: BorderRadius.circular(D.rMd),
-                border: Border.all(color: D.line),
-              ),
-              child: const Text(
-                'Belum ada pengeluaran bulan ini.',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: D.inkMuted),
-              ),
-            )
-          else
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                DonutChart(
-                  segments: _donutSegments(rows),
-                  centerTitle: 'Keluar',
-                  centerValue: formatRupiah(expense),
-                ),
-                const SizedBox(width: D.s4),
-                Expanded(
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < rows.length && i < 5; i++)
-                        _legendRow(
-                          context,
-                          categoryColor(rows[i].key),
-                          catName[rows[i].key]?.name ?? 'Tanpa kategori',
-                          rows[i].value,
-                          expense == 0 ? 0.0 : rows[i].value / expense * 100,
-                          categoryId: rows[i].key,
-                          onTap: () => openCategory(rows[i].key),
-                        ),
-                      if (rows.length > 5)
-                        _legendRow(
-                          context,
-                          D.inkMuted,
-                          'Lainnya (${rows.length - 5})',
-                          rows.skip(5).fold<int>(0, (a, r) => a + r.value),
-                          expense == 0
-                              ? 0.0
-                              : rows.skip(5).fold<int>(0, (a, r) => a + r.value) /
-                                  expense *
-                                  100,
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          // ── Donut pengeluaran per kategori ──
+          _CategoryDonutCard(
+            title: 'Pengeluaran per Kategori',
+            rows: rows,
+            total: expense,
+            centerTitle: 'Keluar',
+            emptyText: 'Belum ada pengeluaran bulan ini.',
+            catName: catName,
+            onOpenCategory: openCategory,
+          ),
           const SizedBox(height: D.s6),
-
-          // ── Donut pemasukan per kategori (hanya bila ada pemasukan) ──
-          if (incomeRows.isNotEmpty) ...[
-            const Text('Pemasukan per Kategori',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-            const SizedBox(height: D.s3),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                DonutChart(
-                  segments: _donutSegments(incomeRows),
-                  centerTitle: 'Masuk',
-                  centerValue: formatRupiah(income),
-                ),
-                const SizedBox(width: D.s4),
-                Expanded(
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < incomeRows.length && i < 5; i++)
-                        _legendRow(
-                          context,
-                          categoryColor(incomeRows[i].key),
-                          catName[incomeRows[i].key]?.name ?? 'Tanpa kategori',
-                          incomeRows[i].value,
-                          income == 0
-                              ? 0.0
-                              : incomeRows[i].value / income * 100,
-                          categoryId: incomeRows[i].key,
-                          onTap: () => openCategory(incomeRows[i].key),
-                        ),
-                      if (incomeRows.length > 5)
-                        _legendRow(
-                          context,
-                          D.inkMuted,
-                          'Lainnya (${incomeRows.length - 5})',
-                          incomeRows.skip(5).fold<int>(0, (a, r) => a + r.value),
-                          income == 0
-                              ? 0.0
-                              : incomeRows.skip(5).fold<int>(0, (a, r) => a + r.value) /
-                                  income *
-                                  100,
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: D.s6),
-          ],
 
           // ── Tren pengeluaran 6 bulan ──
           const _FlowTrendCard(),
@@ -285,33 +191,135 @@ class _ReportsSummaryTab extends ConsumerWidget {
         ? '▲ $pct% vs ${name[prevMonth.month - 1]}'
         : '▼ ${-pct}% vs ${name[prevMonth.month - 1]}';
   }
+}
 
-  List<DonutSegment> _donutSegments(List<MapEntry<String, int>> rows) {
+/// Kartu donut + legenda pengeluaran per kategori.
+class _CategoryDonutCard extends StatelessWidget {
+  const _CategoryDonutCard({
+    required this.title,
+    required this.rows,
+    required this.total,
+    required this.centerTitle,
+    required this.emptyText,
+    required this.catName,
+    required this.onOpenCategory,
+  });
+
+  final String title;
+  final List<_CategoryRow> rows;
+  final int total;
+  final String centerTitle;
+  final String emptyText;
+  final Map<String, Category> catName;
+  final void Function(String categoryId) onOpenCategory;
+
+  List<DonutSegment> _segments() {
     final segs = <DonutSegment>[];
     for (var i = 0; i < rows.length && i < 5; i++) {
       segs.add(DonutSegment(
-          value: rows[i].value.toDouble(), color: categoryColor(rows[i].key)));
+          value: rows[i].total.toDouble(),
+          color: categoryColor(rows[i].id)));
     }
     if (rows.length > 5) {
       segs.add(DonutSegment(
-        value: rows.skip(5).fold<int>(0, (a, r) => a + r.value).toDouble(),
+        value: rows.skip(5).fold<int>(0, (a, r) => a + r.total).toDouble(),
         color: D.inkMuted,
       ));
     }
     return segs;
   }
 
-  Widget _legendRow(
-    BuildContext context,
-    Color color,
-    String name,
-    int amount,
-    double pct, {
-    String? categoryId,
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title,
+            style:
+                const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+        const SizedBox(height: D.s1 + 2),
+        Text('Ketuk kategori untuk filter',
+            style: const TextStyle(fontSize: 11, color: D.inkMuted)),
+        const SizedBox(height: D.s3),
+        if (rows.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(D.s6),
+            decoration: BoxDecoration(
+              color: D.card,
+              borderRadius: BorderRadius.circular(D.rMd),
+              border: Border.all(color: D.line),
+            ),
+            child: Text(
+              emptyText,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: D.inkMuted),
+            ),
+          )
+        else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              DonutChart(
+                segments: _segments(),
+                centerTitle: centerTitle,
+                centerValue: formatRupiah(total),
+                size: 132,
+                stroke: 20,
+              ),
+              const SizedBox(width: D.s4),
+              Expanded(
+                child: Column(
+                  children: [
+                    for (var i = 0; i < rows.length && i < 5; i++)
+                      _legendRow(
+                        color: categoryColor(rows[i].id),
+                        name: catName[rows[i].id]?.name ?? 'Tanpa kategori',
+                        amount: rows[i].total,
+                        count: rows[i].count,
+                        pct: total == 0
+                            ? 0.0
+                            : rows[i].total / total * 100,
+                        onTap: () => onOpenCategory(rows[i].id),
+                      ),
+                    if (rows.length > 5)
+                      _legendRow(
+                        color: D.inkMuted,
+                        name: 'Lainnya (${rows.length - 5})',
+                        amount: rows
+                            .skip(5)
+                            .fold<int>(0, (a, r) => a + r.total),
+                        count: rows
+                            .skip(5)
+                            .fold<int>(0, (a, r) => a + r.count),
+                        pct: total == 0
+                            ? 0.0
+                            : rows
+                                    .skip(5)
+                                    .fold<int>(0, (a, r) => a + r.total) /
+                                total *
+                                100,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _legendRow({
+    required Color color,
+    required String name,
+    required int amount,
+    required int count,
+    required double pct,
     VoidCallback? onTap,
   }) {
-    final row = Padding(
-      padding: const EdgeInsets.symmetric(vertical: D.s1 + 2),
+    final row = Container(
+      constraints: const BoxConstraints(minHeight: 44),
+      padding: const EdgeInsets.symmetric(vertical: 6),
       child: Row(
         children: [
           Container(
@@ -321,21 +329,43 @@ class _ReportsSummaryTab extends ConsumerWidget {
           ),
           const SizedBox(width: D.s2),
           Expanded(
-            child: Text(name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-          Text(formatRupiah(amount),
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
-          const SizedBox(width: D.s2),
-          SizedBox(
-            width: 34,
-            child: Text('${pct.toStringAsFixed(0)}%',
-                textAlign: TextAlign.right,
-                style:
-                    const TextStyle(fontSize: 11.5, color: D.inkMuted)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w600)),
+                    ),
+                    const SizedBox(width: D.s2),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Text('${pct.toStringAsFixed(0)}%',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: color)),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text('${formatRupiah(amount)} • $count transaksi',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 11.5, color: D.inkMuted)),
+              ],
+            ),
           ),
         ],
       ),
@@ -362,20 +392,25 @@ class _FlowTrendCard extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final daily = ref.watch(trendDailyModeProvider);
-    // Filter OFF (null) → tren default Keluar, sama dengan Beranda.
-    final out = ref.watch(flowOutProvider) ?? true;
-    const color = D.cobalt;
+    final out = ref.watch(flowOutProvider);
     final month = ref.watch(reportMonthProvider);
     final reduced = MediaQuery.of(context).disableAnimations;
     final monthName = _monthNames[month.month - 1];
     final now = DateTime.now();
 
-    // Mode Bulan: 6 bulan s/d bulan laporan; mode Hari: 7 hari kalender
-    // terakhir (rolling, tidak bergantung bulan laporan).
     final monthly = ref.watch(trendMonthsProvider).valueOrNull;
     final weekly = ref.watch(last7DaysFlowProvider).valueOrNull;
     final flow = daily ? weekly : monthly;
-    final values = flow == null ? null : (out ? flow.expense : flow.income);
+
+    final expenseValues = flow?.expense;
+    final incomeValues = flow?.income;
+    final showBoth = out == null && flow != null;
+    final values = flow == null
+        ? null
+        : (out == null ? null : (out ? expenseValues : incomeValues));
+    final color = out == false ? D.income : D.cobalt;
+    final totalExpense = expenseValues?.fold<int>(0, (a, b) => a + b) ?? 0;
+    final totalIncome = incomeValues?.fold<int>(0, (a, b) => a + b) ?? 0;
 
     return Container(
       width: double.infinity,
@@ -393,7 +428,9 @@ class _FlowTrendCard extends ConsumerWidget {
             children: [
               Expanded(
                 child: Text(
-                  daily ? 'Tren 7 Hari Terakhir' : 'Tren 6 Bulan s/d $monthName',
+                  daily
+                      ? 'Tren 7 Hari Terakhir'
+                      : 'Tren 6 Bulan s/d $monthName ${month.year}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -421,68 +458,198 @@ class _FlowTrendCard extends ConsumerWidget {
           const SizedBox(height: D.s3),
           Row(
             children: [
-              _TrendLegendDot(
-                  color: color, label: out ? 'Keluar' : 'Masuk'),
+              if (showBoth) ...[
+                _TrendLegendDot(color: D.cobalt, label: 'Keluar'),
+                const SizedBox(width: D.s3),
+                _TrendLegendDot(color: D.income, label: 'Masuk'),
+              ] else ...[
+                _TrendLegendDot(
+                    color: color, label: out == false ? 'Masuk' : 'Keluar'),
+              ],
               const Spacer(),
               const FlowToggle(),
             ],
           ),
+          const SizedBox(height: D.s2),
+          if (showBoth)
+            Row(
+              children: [
+                Text('Keluar ${formatRupiah(totalExpense)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: D.cobalt)),
+                const SizedBox(width: D.s3),
+                Text('Masuk ${formatRupiah(totalIncome)}',
+                    style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: D.income)),
+              ],
+            )
+          else if (values != null)
+            Text(
+              'Total ${out == false ? 'Masuk' : 'Keluar'}: ${formatRupiah(values.fold<int>(0, (a, b) => a + b))}',
+              style: TextStyle(
+                  fontSize: 12, fontWeight: FontWeight.w700, color: color),
+            ),
           const SizedBox(height: D.s3),
-          values == null
-              ? const SizedBox(height: 84)
-              : Builder(builder: (context) {
-                  final maxV =
-                      values.fold<int>(0, (a, b) => b > a ? b : a);
-                  return TweenAnimationBuilder<double>(
-                    key: ValueKey('$daily-$out-${daily ? 0 : month}'),
-                    tween: Tween(begin: 0, end: 1),
-                    duration: reduced
-                        ? Duration.zero
-                        : const Duration(milliseconds: 500),
-                    curve: Curves.easeOutCubic,
-                    builder: (context, t, _) => SizedBox(
-                      height: 84,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          for (var i = 0; i < values.length; i++)
-                            Expanded(
-                              child: _TrendBar(
-                                value:
-                                    (values[i] / (maxV == 0 ? 1 : maxV)) *
-                                        t,
+          Builder(builder: (context) {
+            if (flow == null) return const SizedBox(height: 130);
+            final ev = flow.expense;
+            final iv = flow.income;
+            final sb = out == null;
+            final vals = sb ? null : (out ? ev : iv);
+            final maxV = sb
+                ? [...ev, ...iv].fold<int>(0, (a, b) => b > a ? b : a)
+                : vals!.fold<int>(0, (a, b) => b > a ? b : a);
+            final count = ev.length;
+            return TweenAnimationBuilder<double>(
+              key: ValueKey('$daily-$out-${daily ? 0 : month}'),
+              tween: Tween(begin: 0, end: 1),
+              duration: reduced
+                  ? Duration.zero
+                  : const Duration(milliseconds: 500),
+              curve: Curves.easeOutCubic,
+              builder: (context, t, _) => SizedBox(
+                height: 130,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < count; i++)
+                      Expanded(
+                        child: sb
+                            ? Column(
+                                children: [
+                                  Expanded(
+                                    child: Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.end,
+                                      children: [
+                                        _TrendBar(
+                                          value: (ev[i] /
+                                                  (maxV == 0 ? 1 : maxV)) *
+                                              t,
+                                          color: D.cobalt,
+                                          isHighlighted: daily
+                                              ? i == 6
+                                              : i == count - 1,
+                                          label: '',
+                                          showValue: false,
+                                          showLabel: false,
+                                          barWidth: daily ? 5 : 12,
+                                          onTap: daily
+                                              ? () =>
+                                                  showDayTransactionsSheet(
+                                                      context,
+                                                      now.subtract(Duration(
+                                                          days: 6 - i)))
+                                              : () => ref
+                                                      .read(
+                                                          reportMonthProvider
+                                                              .notifier)
+                                                      .state =
+                                                  DateTime(
+                                                      month.year,
+                                                      month.month -
+                                                          5 +
+                                                          i,
+                                                      1),
+                                        ),
+                                        const SizedBox(width: 3),
+                                        _TrendBar(
+                                          value: (iv[i] /
+                                                  (maxV == 0 ? 1 : maxV)) *
+                                              t,
+                                          color: D.income,
+                                          isHighlighted: daily
+                                              ? i == 6
+                                              : i == count - 1,
+                                          label: '',
+                                          showValue: false,
+                                          showLabel: false,
+                                          barWidth: daily ? 5 : 12,
+                                          onTap: daily
+                                              ? () =>
+                                                  showDayTransactionsSheet(
+                                                      context,
+                                                      now.subtract(Duration(
+                                                          days: 6 - i)))
+                                              : () => ref
+                                                      .read(
+                                                          reportMonthProvider
+                                                              .notifier)
+                                                      .state =
+                                                  DateTime(
+                                                      month.year,
+                                                      month.month -
+                                                          5 +
+                                                          i,
+                                                      1),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: D.s1 + 2),
+                                  SizedBox(
+                                    width: double.infinity,
+                                    height: 14,
+                                    child: FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      child: Text(
+                                        daily
+                                            ? _dayTrendLabel(now, i)
+                                            : _monthTrendLabel(month, i),
+                                        maxLines: 1,
+                                        textAlign: TextAlign.center,
+                                        style: const TextStyle(
+                                          fontSize: 10.5,
+                                          fontWeight: FontWeight.w600,
+                                          color: D.inkMuted,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : _TrendBar(
+                                value: (vals![i] /
+                                        (maxV == 0 ? 1 : maxV)) *
+                                    t,
                                 color: color,
                                 isHighlighted: daily
                                     ? i == 6
-                                    : i == values.length - 1,
-                                label: daily ? _dayTrendLabel(now, i)
-                                    : _monthNames[DateTime(month.year,
-                                            month.month - 5 + i)
-                                        .month -
-                                        1],
-                                valueText: values[i] > 0
-                                    ? formatRupiah(values[i])
+                                    : i == count - 1,
+                                label: daily
+                                    ? _dayTrendLabel(now, i)
+                                    : _monthTrendLabel(month, i),
+                                valueText: vals[i] > 0
+                                    ? formatCompactId(vals[i])
                                     : null,
                                 showValue: !daily,
-                                barWidth: daily ? 5 : 7,
+                                barWidth: daily ? 5 : 12,
                                 onTap: daily
                                     ? () => showDayTransactionsSheet(
                                         context,
-                                        now
-                                            .subtract(Duration(days: 6 - i)))
+                                        now.subtract(
+                                            Duration(days: 6 - i)))
                                     : () => ref
-                                            .read(reportMonthProvider.notifier)
-                                            .state = DateTime(
-                                                month.year,
-                                                month.month - 5 + i,
-                                                1),
+                                            .read(
+                                                reportMonthProvider.notifier)
+                                            .state =
+                                        DateTime(
+                                            month.year,
+                                            month.month - 5 + i,
+                                            1),
                               ),
-                            ),
-                        ],
                       ),
-                    ),
-                  );
-                }),
+                  ],
+                ),
+              ),
+            );
+          }),
         ],
       ),
     );
@@ -495,6 +662,20 @@ class _FlowTrendCard extends ConsumerWidget {
         .subtract(Duration(days: 6 - i));
     const names = ['Jn', 'Fb', 'Mr', 'Ap', 'Me', 'Jn', 'Jl', 'Ag', 'Sp', 'Ok', 'Nv', 'Ds'];
     return day.day == 1 ? '${day.day} ${names[day.month - 1]}' : '${day.day}';
+  }
+
+  /// Label bulan tren 6 bulan: "Mar" biasa, tambah 2 digit tahun
+  /// ("Jan 26") saat Januari atau bar pertama bila rentang
+  /// melewati tahun baru — tetap tengah via FittedBox pemanggil.
+  String _monthTrendLabel(DateTime month, int i) {
+    final d = DateTime(month.year, month.month - 5 + i);
+    final name = _monthNames[d.month - 1];
+    final first = DateTime(month.year, month.month - 5);
+    final spansYear = first.year != month.year;
+    if (d.month == 1 || (spansYear && i == 0)) {
+      return '$name ${d.year % 100}';
+    }
+    return name;
   }
 }
 
@@ -528,6 +709,7 @@ class _TrendBar extends StatelessWidget {
     required this.showValue,
     this.valueText,
     this.barWidth = 14,
+    this.showLabel = true,
     this.onTap,
   });
 
@@ -538,6 +720,7 @@ class _TrendBar extends StatelessWidget {
   final bool showValue;
   final String? valueText;
   final double barWidth;
+  final bool showLabel;
   final VoidCallback? onTap;
 
   @override
@@ -551,13 +734,19 @@ class _TrendBar extends StatelessWidget {
       child: Column(
         children: [
           if (showValue) ...[
-            Text(
-              valueText ?? '—',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 9,
-                color: isHighlighted ? D.cobalt : D.inkMuted,
+            SizedBox(
+              height: 12,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  valueText ?? '',
+                  maxLines: 1,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    color: isHighlighted ? D.cobalt : D.inkMuted,
+                  ),
+                ),
               ),
             ),
             const SizedBox(height: D.s1),
@@ -579,21 +768,27 @@ class _TrendBar extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: D.s1 + 2),
-          SizedBox(
-            height: 13,
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.visible,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10.5,
-                fontWeight: isHighlighted ? FontWeight.w800 : FontWeight.w500,
-                color: isHighlighted ? D.cobalt : D.inkMuted,
+          if (showLabel) ...[
+            const SizedBox(height: D.s1 + 2),
+            SizedBox(
+              width: double.infinity,
+              height: 14,
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 10.5,
+                    fontWeight:
+                        isHighlighted ? FontWeight.w800 : FontWeight.w500,
+                    color: isHighlighted ? D.cobalt : D.inkMuted,
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -700,33 +895,71 @@ class _StatCard extends StatelessWidget {
     required this.label,
     required this.value,
     required this.color,
+    this.sub,
+    this.icon,
   });
 
   final String label;
   final String value;
   final Color color;
+  final String? sub;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(D.s3),
+      padding: const EdgeInsets.all(D.s4),
       decoration: BoxDecoration(
-        color: D.card,
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(D.rMd),
-        border: Border.all(color: D.line),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  fontSize: 11.5, color: D.inkMuted, fontWeight: FontWeight.w600)),
-          const SizedBox(height: D.s1 + 2),
-          Text(value,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: 13.5, fontWeight: FontWeight.w800, color: color)),
+          Row(
+            children: [
+              if (icon != null) ...[
+                Container(
+                  width: 26,
+                  height: 26,
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.14),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(icon, size: 15, color: color),
+                ),
+                const SizedBox(width: D.s2),
+              ],
+              Expanded(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontSize: 12,
+                        color: D.inkMuted,
+                        fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+          const SizedBox(height: D.s2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(value,
+                maxLines: 1,
+                style: TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w800, color: color)),
+          ),
+          if (sub != null) ...[
+            const SizedBox(height: 2),
+            Text(sub!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style:
+                    const TextStyle(fontSize: 11, color: D.inkMuted)),
+          ],
         ],
       ),
     );
