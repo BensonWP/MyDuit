@@ -94,7 +94,7 @@ class BackupService {
             .map((r) => r['name'] as String)
             .toSet();
 
-        const required = {'accounts', 'transactions', 'bills'};
+        const required = {'accounts', 'transactions', 'bills', 'custom_brands'};
         final missing = required.difference(tables);
         if (missing.isNotEmpty) {
           return 'Tabel tidak lengkap: ${missing.join(', ')}';
@@ -179,6 +179,29 @@ class BackupService {
     ref.invalidate(dbProvider);
 
     return (restored: true, error: null);
+  }
+
+  /// Snapshot pra-wipe: `myduit_pre_wipe_<stamp>.sqlite`. Stamp dipisah
+  /// dari `_pre_restore_` agar snapshot pra-restore tidak tertimpa oleh
+  /// wipe (dan sebaliknya). Ganti snapshot wipe lama — cukup yang terbaru.
+  /// Return null bila DB belum ada.
+  static File? snapshotBeforeWipe(Directory folder) {
+    final dbFile = File('${folder.path}/myduit.sqlite');
+    if (!dbFile.existsSync()) return null;
+    for (final old in folder
+        .listSync()
+        .whereType<File>()
+        .where((f) => f.path.contains('_pre_wipe_'))) {
+      old.deleteSync();
+    }
+    final stamp = DateTime.now()
+        .toIso8601String()
+        .substring(0, 19)
+        .replaceAll(':', '')
+        .replaceAll('T', '_');
+    final snap = File('${folder.path}/myduit_pre_wipe_$stamp.sqlite');
+    dbFile.copySync(snap.path);
+    return snap;
   }
 
   /// Salin DB saat ini ke `myduit_pre_restore_<stamp>.sqlite`, ganti snapshot

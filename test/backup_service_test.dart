@@ -48,6 +48,7 @@ void main() {
           'CREATE TABLE transactions (id TEXT PRIMARY KEY, account_id TEXT)');
       tempDb.execute(
           'CREATE TABLE bills (id TEXT PRIMARY KEY, account_id TEXT)');
+      tempDb.execute('CREATE TABLE custom_brands (id TEXT PRIMARY KEY)');
       if (userVersion > 0) {
         tempDb.execute('PRAGMA user_version = $userVersion');
       }

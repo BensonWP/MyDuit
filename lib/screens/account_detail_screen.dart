@@ -25,6 +25,29 @@ class AccountDetailScreen extends ConsumerWidget {
     'card': 'Kartu',
   };
 
+  /// Arsipkan: data tetap utuh, wallet hilang dari daftar & total.
+  Future<void> _archiveWallet(
+      BuildContext context, WidgetRef ref, String accountName) async {
+    final db = ref.read(dbProvider);
+    final (txCount, billCount) = await db.accountUsage(accountId);
+    final hasContent = txCount > 0 || billCount > 0;
+
+    if (!context.mounted) return;
+    final confirmed = await confirmDelete(
+      context,
+      'Arsipkan $accountName?',
+      description: hasContent
+          ? 'Dompet ini punya $txCount transaksi dan $billCount tagihan. '
+              'Data tetap utuh dan bisa diaktifkan lagi dari Diarsipkan.'
+          : 'Dompet masih kosong — diarsipkan dan bisa diaktifkan lagi.',
+      confirmLabel: 'Arsipkan',
+    );
+    if (!confirmed) return;
+
+    await db.archiveAccount(accountId);
+    if (context.mounted) Navigator.pop(context);
+  }
+
   /// Hapus permanen: konfirmasi menampilkan isi wallet agar keputusan sadar.
   Future<void> _deleteWallet(
       BuildContext context, WidgetRef ref, String accountName) async {
@@ -36,9 +59,9 @@ class AccountDetailScreen extends ConsumerWidget {
       context,
       'Hapus $accountName?',
       description: hasContent
-          ? 'Wallet ini punya $txCount transaksi dan $billCount tagihan. '
+          ? 'Dompet ini punya $txCount transaksi dan $billCount tagihan. '
               'Semua akan dihapus permanen dan saldo dihitung ulang.'
-          : 'Wallet masih kosong dan bisa dihapus dengan aman.',
+          : 'Dompet masih kosong dan bisa dihapus dengan aman.',
     );
     if (!confirmed) return;
 
@@ -74,19 +97,28 @@ class AccountDetailScreen extends ConsumerWidget {
         actions: [
           IconButton(
             icon: const Icon(Icons.edit_rounded, size: 20),
-            tooltip: 'Edit wallet',
+            tooltip: 'Edit dompet',
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute(
                   builder: (_) => AccountFormScreen(accountId: accountId)),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.delete_outline_rounded,
-                size: 22, color: D.expense),
-            tooltip: 'Hapus wallet',
-            onPressed: () =>
-                _deleteWallet(context, ref, account.name),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert_rounded),
+            tooltip: 'Arsip / hapus dompet',
+            onSelected: (v) {
+              if (v == 'archive') {
+                _archiveWallet(context, ref, account.name);
+              }
+              if (v == 'delete') {
+                _deleteWallet(context, ref, account.name);
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'archive', child: Text('Arsipkan')),
+              PopupMenuItem(value: 'delete', child: Text('Hapus permanen')),
+            ],
           ),
         ],
       ),
@@ -160,7 +192,7 @@ class AccountDetailScreen extends ConsumerWidget {
                   Icon(Icons.receipt_long_rounded,
                       size: 40, color: D.inkMuted),
                   SizedBox(height: D.s3),
-                  Text('Belum ada transaksi di wallet ini',
+                  Text('Belum ada transaksi di dompet ini',
                       style: TextStyle(fontWeight: FontWeight.w700)),
                   SizedBox(height: D.s1),
                   Text(

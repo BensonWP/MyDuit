@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../db/database.dart';
 import '../utils/dates.dart';
+import '../utils/wallet_brand.dart';
 
 /// Satu rangkaian pengeluaran & pemasukan (list sejajar, indeks = periode).
 typedef MonthFlow = ({List<int> expense, List<int> income});
@@ -55,10 +56,43 @@ final accountsStreamProvider = StreamProvider<List<Account>>((ref) {
   return ref.watch(dbProvider).watchAllAccounts();
 });
 
+/// Wallet arsip — untuk seksi Diarsipkan di tab Wallet.
+final archivedAccountsProvider = StreamProvider<List<Account>>((ref) {
+  return ref.watch(dbProvider).watchArchivedAccounts();
+});
+
+// ─── Brand wallet (master: bawaan + custom) ────────────────────
+
+/// SEMUA brand dari DB (bawaan di-seed saat migrasi + tambahan user).
+final brandsProvider = StreamProvider<List<CustomBrand>>((ref) {
+  return ref.watch(dbProvider).watchCustomBrands();
+});
+
+/// Brand per kind (bank/ewallet/card) untuk picker form & Kelola Brand.
+final brandsByKindProvider =
+    StreamProvider.family<List<CustomBrand>, String>((ref, kind) {
+  return ref.watch(dbProvider).watchBrandsByKind(kind);
+});
+
+/// Opsi brand per kind untuk picker form wallet.
+final brandOptionsProvider =
+    Provider.family<List<BrandOption>, String>((ref, kind) {
+  final brands = ref.watch(brandsByKindProvider(kind)).valueOrNull ??
+      const <CustomBrand>[];
+  return mergeBrandOptions(brands);
+});
+
 // ─── Category providers ──────────────────────────────────────────
 
 final categoriesStreamProvider = StreamProvider<List<Category>>((ref) {
   return ref.watch(dbProvider).watchAllCategories();
+});
+
+/// Kategori aktif untuk picker form (yang diarsip disembunyikan).
+/// Daftar penuh ([categoriesStreamProvider]) tetap dipakai untuk
+/// resolusi nama transaksi/tagihan lama yang memakai kategori arsip.
+final activeCategoriesProvider = StreamProvider<List<Category>>((ref) {
+  return ref.watch(dbProvider).watchActiveCategories();
 });
 
 // ─── Transaction providers ────────────────────────────────────────
@@ -137,6 +171,66 @@ final completedBillsStreamProvider = StreamProvider<List<Bill>>((ref) {
 final unpaidBillsTotalProvider = Provider<int>((ref) {
   final rows = ref.watch(activeBillsDetailedProvider).valueOrNull ?? const [];
   return billsForMonth(rows, 0).total;
+});
+
+// ─── Anggaran bulanan ──────────────────────────────────────────
+
+final budgetsProvider = StreamProvider<List<BudgetInfo>>((ref) {
+  return ref.watch(dbProvider).watchBudgets();
+});
+
+/// Status satu anggaran terhadap belanja berjalan.
+enum BudgetState { ok, warning, over }
+
+/// warning saat ≥ 80 %, over saat > 100 %. Budget ≤ 0 selalu ok.
+BudgetState budgetState(int spent, int budget) {
+  if (budget <= 0) return BudgetState.ok;
+  final ratio = spent / budget;
+  if (ratio > 1) return BudgetState.over;
+  if (ratio >= 0.8) return BudgetState.warning;
+  return BudgetState.ok;
+}
+
+/// Belanja expense per kategori dari daftar transaksi.
+Map<String, int> spentByCategory(List<Transaction> txs) {
+  final spent = <String, int>{};
+  for (final t in txs) {
+    if (t.type == 'expense' && t.categoryId != null) {
+      spent[t.categoryId!] = (spent[t.categoryId!] ?? 0) + t.amount;
+    }
+  }
+  return spent;
+}
+
+/// Hitung peringatan dari data jadi (fungsi murni — gampang dites).
+({int warning, int over}) budgetAlerts(
+    List<BudgetInfo> budgets, Map<String, int> spent) {
+  var warning = 0, over = 0;
+  for (final b in budgets) {
+    if (b.type != 'expense') continue;
+    switch (budgetState(spent[b.categoryId] ?? 0, b.monthlyAmount)) {
+      case BudgetState.warning:
+        warning++;
+      case BudgetState.over:
+        over++;
+      case BudgetState.ok:
+        break;
+    }
+  }
+  return (warning: warning, over: over);
+}
+
+/// Peringatan anggaran bulan berjalan — untuk banner Beranda.
+/// Bulan berjalan dari ticker agar ikut berganti saat lewat tengah malam.
+final budgetAlertsProvider = Provider<({int warning, int over})>((ref) {
+  final budgets = ref.watch(budgetsProvider).valueOrNull ?? const [];
+  if (budgets.isEmpty) return (warning: 0, over: 0);
+  final now = ref.watch(todayProvider);
+  final txs = ref
+          .watch(monthTransactionsProvider(DateTime(now.year, now.month)))
+          .valueOrNull ??
+      const [];
+  return budgetAlerts(budgets, spentByCategory(txs));
 });
 
 // ─── Proyeksi saldo (Beranda) ──────────────────────────────────────
@@ -362,8 +456,15 @@ final last7DaysFlowProvider =
   return (expense: expense, income: income);
 });
 
-// ─── Anggaran bulanan ──────────────────────────────────────────────
+// ─── Navigasi ────────────────────────────────────────────────────
 
 /// Tab aktif MainShell — agar widget lintas file (misal banner anggaran)
 /// bisa memindahkan tab.
 final navIndexProvider = StateProvider<int>((_) => 0);
+
+// ─── Cinematic unlock ──────────────────────────────────────────
+
+/// Bump tiap unlock sukses — HomeScreen me-replay entrance-nya
+/// (count-up + stagger) lewat KeyedSubtree. Di test tak pernah
+/// berubah → nol efek ke suite.
+final unlockNonceProvider = StateProvider<int>((_) => 0);

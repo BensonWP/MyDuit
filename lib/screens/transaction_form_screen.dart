@@ -90,13 +90,13 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
     final accounts = ref.read(accountsStreamProvider).valueOrNull ?? [];
     final target = id ?? _accountId;
     return accounts.where((a) => a.id == target).firstOrNull?.name ??
-        'wallet';
+        'dompet';
   }
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
     if (_accountId == null) {
-      _snack('Pilih wallet terlebih dahulu');
+      _snack('Pilih dompet terlebih dahulu');
       return;
     }
 
@@ -132,7 +132,10 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       final entry = TransactionsCompanion.insert(
         id: id,
         accountId: _accountId!,
-        categoryId: Value(_categoryId ?? 'cat_other'),
+        // Fallback per jenis: income tanpa kategori → cat_other_income
+        // (bukan cat_other yang expense) agar laporan tak tercampur.
+        categoryId:
+            Value(_categoryId ?? (_type == 'income' ? 'cat_other_income' : 'cat_other')),
         type: Value(_type),
         amount: Value(amount),
         note: Value(_noteController.text.trim()),
@@ -164,7 +167,7 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
       context,
       'Hapus transaksi ini?',
       description:
-          'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
+          'Transaksi dihapus permanen dan saldo dompet dihitung ulang.',
     );
     if (!confirmed || !mounted) return;
 
@@ -186,7 +189,7 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
   @override
   Widget build(BuildContext context) {
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
-    final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
+    final categories = ref.watch(activeCategoriesProvider).valueOrNull ?? [];
     final filteredCategories =
         categories.where((c) => c.type == _type).toList();
 
@@ -230,7 +233,7 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
         // Guard: wallet/kategori yang diarsipkan tak boleh jadi value
         // dropdown (assert Flutter menuntut value ∈ items).
         value: accounts.any((a) => a.id == _accountId) ? _accountId : null,
-        decoration: const InputDecoration(labelText: 'Wallet'),
+        decoration: const InputDecoration(labelText: 'Dompet'),
         items: accounts
             .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
             .toList(),
@@ -275,35 +278,37 @@ class _TransactionFormState extends ConsumerState<TransactionForm> {
         subtitle: Text(_formatDateTime(_date),
             style: const TextStyle(fontSize: 12.5)),
         contentPadding: EdgeInsets.zero,
+        trailing: TextButton(
+          onPressed: () {
+            final now = DateTime.now();
+            setState(() => _date = now);
+          },
+          child: const Text('Sekarang'),
+        ),
         onTap: () async {
-          // Jam lama dipertahankan — date picker tanpa ini menghapus jam.
-          final picked = await showDatePicker(
+          // Alur berurutan: pilih tanggal, lalu jam. Batal di salah satu
+          // tahap mempertahankan nilai lama.
+          final pickedDate = await showDatePicker(
             context: context,
             initialDate: _date,
-            firstDate: DateTime(2020),
+            firstDate: DateTime(2000),
             lastDate: DateTime.now(),
           );
-          if (picked != null) {
-            setState(() => _date = DateTime(picked.year, picked.month,
-                picked.day, _date.hour, _date.minute));
-          }
-        },
-      ),
-      ListTile(
-        leading: const Icon(Icons.schedule_rounded, size: 20, color: D.inkMuted),
-        title: const Text('Jam', style: TextStyle(fontSize: 14)),
-        subtitle: Text(formatTime(_date.toIso8601String()),
-            style: const TextStyle(fontSize: 12.5)),
-        contentPadding: EdgeInsets.zero,
-        onTap: () async {
-          final picked = await showTimePicker(
+          if (pickedDate == null || !context.mounted) return;
+
+          final pickedTime = await showTimePicker(
             context: context,
             initialTime: TimeOfDay.fromDateTime(_date),
           );
-          if (picked != null) {
-            setState(() => _date = DateTime(
-                _date.year, _date.month, _date.day, picked.hour, picked.minute));
-          }
+          if (!context.mounted) return;
+
+          setState(() => _date = DateTime(
+                pickedDate.year,
+                pickedDate.month,
+                pickedDate.day,
+                pickedTime?.hour ?? _date.hour,
+                pickedTime?.minute ?? _date.minute,
+              ));
         },
       ),
       const SizedBox(height: D.s2),

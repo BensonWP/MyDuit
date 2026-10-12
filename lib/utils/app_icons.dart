@@ -18,6 +18,22 @@ const Map<String, IconData> categoryIcons = {
   'work': Icons.work,
   'laptop': Icons.laptop,
   'more_horiz': Icons.more_horiz,
+  'coffee': Icons.coffee,
+  'flight': Icons.flight,
+  'train': Icons.train,
+  'local_gas_station': Icons.local_gas_station,
+  'bolt': Icons.bolt,
+  'water_drop': Icons.water_drop,
+  'wifi': Icons.wifi,
+  'phone_android': Icons.phone_android,
+  'fitness_center': Icons.fitness_center,
+  'sports_esports': Icons.sports_esports,
+  'music_note': Icons.music_note,
+  'book': Icons.book,
+  'pets': Icons.pets,
+  'savings': Icons.savings,
+  'card_giftcard': Icons.card_giftcard,
+  'shopping_cart': Icons.shopping_cart,
 };
 
 IconData getIcon(String key) => categoryIcons[key] ?? Icons.category;

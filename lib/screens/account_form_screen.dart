@@ -70,21 +70,24 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     setState(() {
       _selectedType = type;
       _selectedColor = _typeColors[type] ?? _selectedColor;
-      final brandsForType = (type == 'ewallet' || type == 'bank')
-          ? WalletBrand.byKind(type)
-          : const <WalletBrand>[];
-      if (!brandsForType.any((b) => b.id == _selectedBrand)) {
+      final validIds = {
+        for (final b in ref.read(brandOptionsProvider(type))) b.id,
+      };
+      if (!validIds.contains(_selectedBrand)) {
         _selectedBrand = null;
       }
     });
   }
 
-  /// Pilih brand bank/e-wallet: nama terisi otomatis hanya bila kosong /
-  /// masih label brand lain, warna identitas ikut brand.
-  void _onBrandSelected(WalletBrand brand) {
+  /// Pilih brand bank/e-wallet/kartu: nama terisi otomatis hanya bila
+  /// kosong / masih label brand lain, warna identitas ikut brand.
+  void _onBrandSelected(BrandOption brand) {
     final current = _nameController.text.trim();
-    final isAutoName =
-        current.isEmpty || WalletBrand.all.any((b) => b.label == current);
+    final known = {
+      for (final b in ref.read(brandOptionsProvider(_selectedType)))
+        b.label,
+    };
+    final isAutoName = current.isEmpty || known.contains(current);
     setState(() {
       _selectedBrand = brand.id;
       if (isAutoName) _nameController.text = brand.label;
@@ -115,14 +118,13 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
         ? _autoCashName()
         : _nameController.text.trim();
 
+    final hasBrand = _selectedType != 'cash';
     final entry = AccountsCompanion.insert(
       id: id,
       name: name,
       type: Value(_selectedType),
       color: Value(_selectedColor),
-      brand: Value((_selectedType == 'ewallet' || _selectedType == 'bank')
-          ? _selectedBrand
-          : null),
+      brand: Value(hasBrand ? _selectedBrand : null),
       initialBalance: Value(int.tryParse(parseCurrency(_balanceController.text)) ?? 0),
       createdAt: _createdAt ?? DateTime.now().toIso8601String(),
     );
@@ -138,11 +140,16 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final hasBrandPicker =
-        _selectedType == 'ewallet' || _selectedType == 'bank';
+    final hasBrandPicker = _selectedType == 'ewallet' ||
+        _selectedType == 'bank' ||
+        _selectedType == 'card';
+    // Opsi gabungan bawaan + custom (Kelola Brand).
+    final brandOptions = hasBrandPicker
+        ? ref.watch(brandOptionsProvider(_selectedType))
+        : const <BrandOption>[];
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.accountId != null ? 'Edit Wallet' : 'Tambah Wallet'),
+        title: Text(widget.accountId != null ? 'Edit Dompet' : 'Tambah Dompet'),
       ),
       body: Form(
         key: _formKey,
@@ -153,7 +160,7 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
               TextFormField(
                 controller: _nameController,
                 decoration: const InputDecoration(
-                  labelText: 'Nama Wallet',
+                  labelText: 'Nama Dompet',
                   border: OutlineInputBorder(),
                 ),
                 validator: (v) =>
@@ -201,9 +208,11 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                              _selectedType == 'bank'
-                                  ? 'Pilih Bank'
-                                  : 'Pilih Brand',
+                              switch (_selectedType) {
+                                'bank' => 'Pilih Bank',
+                                'card' => 'Pilih Kartu',
+                                _ => 'Pilih Brand',
+                              },
                               style: const TextStyle(
                                   fontSize: 13, fontWeight: FontWeight.w500)),
                           const SizedBox(height: 8),
@@ -211,7 +220,7 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
                             spacing: 12,
                             runSpacing: 8,
                             children: [
-                              for (final brand in WalletBrand.byKind(_selectedType))
+                              for (final brand in brandOptions)
                                 _brandImage(brand),
                             ],
                           ),
@@ -243,10 +252,10 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
     );
   }
 
-  Widget _brandImage(WalletBrand brand) {
+  Widget _brandImage(BrandOption brand) {
     return _ImageOption(
-      asset: brand.asset,
-      brand: brand,
+      logo: brand.logo,
+      hex: brand.hex,
       label: brand.label,
       selected: _selectedBrand == brand.id,
       onTap: () => _onBrandSelected(brand),
@@ -255,18 +264,20 @@ class _AccountFormScreenState extends ConsumerState<AccountFormScreen> {
 }
 
 /// Kotak pilihan bergambar: 56×56 + label, ring cobalt saat terpilih.
-/// [asset] null → placeholder inisial [BrandInitial] dari [brand].
+/// [asset] null + [logo] null → placeholder inisial warna [hex].
 class _ImageOption extends StatelessWidget {
   const _ImageOption({
-    required this.asset,
     required this.label,
     required this.selected,
     required this.onTap,
-    this.brand,
+    this.asset,
+    this.logo,
+    this.hex,
   });
 
   final String? asset;
-  final WalletBrand? brand;
+  final Uint8List? logo;
+  final String? hex;
   final String label;
   final bool selected;
   final VoidCallback onTap;
@@ -274,11 +285,17 @@ class _ImageOption extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final reduced = MediaQuery.of(context).disableAnimations;
-    final logo = asset != null
+    final logoWidget = asset != null
         ? ClipRRect(
             borderRadius: BorderRadius.circular(14),
-            child: Image.asset(asset!, width: 48, height: 48, fit: BoxFit.cover))
-        : BrandInitial(brand: brand!, size: 48);
+            child:
+                Image.asset(asset!, width: 48, height: 48, fit: BoxFit.cover))
+        : logo != null
+            ? ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Image.memory(logo!,
+                    width: 48, height: 48, fit: BoxFit.cover))
+            : BrandInitial(label: label, hex: hex ?? '#607D8B', size: 48);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
@@ -297,7 +314,7 @@ class _ImageOption extends StatelessWidget {
         ),
         child: Column(
           children: [
-            logo,
+            logoWidget,
             const SizedBox(height: 3),
             Text(label,
                 maxLines: 1,

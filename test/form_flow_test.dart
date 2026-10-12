@@ -90,6 +90,42 @@ void main() {
     }
   });
 
+  testWidgets('Tambah transaksi: pemasukan tanpa kategori pakai fallback income',
+      (tester) async {
+    try {
+      final now = DateTime.now().toIso8601String();
+      await db.into(db.accounts).insert(AccountsCompanion.insert(
+            id: 'acc1',
+            name: 'Cash',
+            createdAt: now,
+            initialBalance: const Value(0),
+          ));
+
+      await tester.pumpWidget(wrap(const TransactionForm()));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Pemasukan'));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextFormField).first, '50000');
+      await tester.tap(find.byIcon(Icons.arrow_drop_down).first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cash').last);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('Simpan'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Simpan'));
+      await tester.pumpAndSettle();
+
+      final txs = await db.select(db.transactions).get();
+      expect(txs.single.type, 'income');
+      // Bukan cat_other (expense) — fallback per jenis.
+      expect(txs.single.categoryId, 'cat_other_income');
+      expect(await db.accountBalance('acc1'), 50000);
+    } finally {
+      await unmount(tester);
+    }
+  });
+
   testWidgets('Tambah transaksi: expense melebihi saldo tampil pesan inline',
       (tester) async {
     try {

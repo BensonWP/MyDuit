@@ -15,6 +15,7 @@ import 'screens/bills_screen.dart';
 import 'screens/profil_screen.dart';
 import 'screens/transaction_form_screen.dart';
 import 'providers/database_provider.dart';
+import 'services/brand_logo_backfill.dart';
 import 'services/lock_service.dart';
 import 'services/notification_service.dart';
 import 'theme/app_theme.dart';
@@ -52,19 +53,22 @@ class MyApp extends StatelessWidget {
 
 /// Sambungan dari native splash ke app: logo zoom-punch (blur+overshoot),
 /// mendarat dengan wobble, sapuan shimmer, lalu pushReplacement ke MainShell.
-class SplashScreen extends StatefulWidget {
+class SplashScreen extends ConsumerStatefulWidget {
   const SplashScreen({super.key});
 
   @override
-  State<SplashScreen> createState() => _SplashScreenState();
+  ConsumerState<SplashScreen> createState() => _SplashScreenState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
-  static const _hold = Duration(milliseconds: 2200);
+class _SplashScreenState extends ConsumerState<SplashScreen> {
+  // Splash padat 1400ms: lead-in 100 + zoom 450 + wobble 350 + shimmer 450.
+  static const _hold = Duration(milliseconds: 1400);
 
   @override
   void initState() {
     super.initState();
+    // Sekali: isi logo brand bawaan dari asset → blob DB (idempotent).
+    unawaited(backfillBuiltinBrandLogos(ref.read(dbProvider)));
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final reduced = MediaQuery.of(context).disableAnimations;
       // Cold start selalu menampilkan logo sebentar; tanpa gerak bila
@@ -76,9 +80,16 @@ class _SplashScreenState extends State<SplashScreen> {
 
   void _go() {
     if (!mounted) return;
+    final reduced = MediaQuery.of(context).disableAnimations;
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const LockGate()),
+      PageRouteBuilder(
+        transitionDuration:
+            reduced ? Duration.zero : const Duration(milliseconds: 300),
+        pageBuilder: (_, __, ___) => const LockGate(),
+        transitionsBuilder: (_, anim, __, child) =>
+            FadeTransition(opacity: anim, child: child),
+      ),
     );
   }
 
@@ -93,15 +104,15 @@ class _SplashScreenState extends State<SplashScreen> {
         child: reduced
             ? logo
             : logo
-                // Lead-in 200ms: frame jank awal (startup) tidak memakan
+                // Lead-in 100ms: frame jank awal (startup) tidak memakan
                 // zoom-punch pertama.
-                .animate(delay: 200.ms)
+                .animate(delay: 100.ms)
                 // Zoom-punch: blur besar → tajam, overshoot sedikit.
                 .fadeIn(duration: 250.ms)
                 .scale(
                   begin: const Offset(2.6, 2.6),
                   end: const Offset(1, 1),
-                  duration: 650.ms,
+                  duration: 450.ms,
                   curve: Curves.easeOutBack,
                   delay: 0.ms,
                 )
@@ -112,11 +123,11 @@ class _SplashScreenState extends State<SplashScreen> {
                   delay: 0.ms,
                 )
                 // Mendarat: wobble kecil.
-                .then(delay: 80.ms)
-                .shake(duration: 450.ms, hz: 2.4, rotation: pi / 60)
+                .then()
+                .shake(duration: 350.ms, hz: 2.4, rotation: pi / 60)
                 // Kilap terakhir sebelum masuk app.
                 .then()
-                .shimmer(duration: 650.ms, color: Colors.white),
+                .shimmer(duration: 450.ms, color: Colors.white),
       ),
     );
   }
@@ -126,16 +137,20 @@ class _SplashScreenState extends State<SplashScreen> {
 /// di Offstage saat terkunci — PageView & data tidak di-reset.
 /// Kebijakan: terkunci saat dibuka, dan saat kembali dari background
 /// setelah lebih dari [LockService.graceDuration].
-class LockGate extends StatefulWidget {
+class LockGate extends ConsumerStatefulWidget {
   const LockGate({super.key});
 
   @override
-  State<LockGate> createState() => _LockGateState();
+  ConsumerState<LockGate> createState() => _LockGateState();
 }
 
-class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
+class _LockGateState extends ConsumerState<LockGate>
+    with WidgetsBindingObserver {
   bool _checking = true;
   bool _locked = false;
+
+  /// Fase keluar sinematik: layar kunci fade + zoom sebelum dilepas.
+  bool _unlocking = false;
   DateTime? _backgroundedAt;
 
   @override
@@ -172,7 +187,24 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
     }
   }
 
-  void _unlock() => setState(() => _locked = false);
+  void _unlock() => _cinematicUnlock();
+
+  /// Sukses biometrik: layar kunci fade + zoom out 280ms, baru dilepas —
+  /// sinematik, bukan cut instan. Lalu bump nonce agar Beranda replay
+  /// entrance-nya tepat saat tirai tersingkap.
+  Future<void> _cinematicUnlock() async {
+    if (_unlocking || !_locked) return;
+    final reduced = MediaQuery.of(context).disableAnimations;
+    setState(() => _unlocking = true);
+    await Future.delayed(
+        reduced ? Duration.zero : const Duration(milliseconds: 280));
+    if (!mounted) return;
+    setState(() {
+      _locked = false;
+      _unlocking = false;
+    });
+    ref.read(unlockNonceProvider.notifier).state++;
+  }
 
   @override
   void dispose() {
@@ -185,12 +217,26 @@ class _LockGateState extends State<LockGate> with WidgetsBindingObserver {
     if (_checking) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    final reduced = MediaQuery.of(context).disableAnimations;
+    final exitDuration =
+        reduced ? Duration.zero : const Duration(milliseconds: 280);
     return Stack(
       children: [
         const MainShell(),
         // LockScreen hanya ada di tree saat terkunci → initState-nya
         // (auto-prompt biometrik) baru berjalan saat benar-benar terkunci.
-        if (_locked) LockScreen(onUnlock: _unlock),
+        // Fase _unlocking: fade + zoom sebelum dilepas dari tree.
+        if (_locked)
+          AnimatedScale(
+            scale: _unlocking ? 1.06 : 1.0,
+            duration: exitDuration,
+            curve: Curves.easeOutCubic,
+            child: AnimatedOpacity(
+              opacity: _unlocking ? 0.0 : 1.0,
+              duration: exitDuration,
+              child: LockScreen(onUnlock: _unlock),
+            ),
+          ),
       ],
     );
   }
@@ -309,7 +355,7 @@ class _MainShellState extends ConsumerState<MainShell> {
           NavigationDestination(
             icon: Icon(Icons.account_balance_wallet_outlined),
             selectedIcon: Icon(Icons.account_balance_wallet_rounded),
-            label: 'Wallet',
+            label: 'Dompet',
           ),
           NavigationDestination(
             icon: Icon(Icons.receipt_long_outlined),

@@ -2612,6 +2612,515 @@ class BudgetsCompanion extends UpdateCompanion<Budget> {
   }
 }
 
+class $CustomBrandsTable extends CustomBrands
+    with TableInfo<$CustomBrandsTable, CustomBrand> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CustomBrandsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+    'name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+    'kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('bank'),
+  );
+  static const VerificationMeta _hexMeta = const VerificationMeta('hex');
+  @override
+  late final GeneratedColumn<String> hex = GeneratedColumn<String>(
+    'hex',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('#607D8B'),
+  );
+  static const VerificationMeta _logoMeta = const VerificationMeta('logo');
+  @override
+  late final GeneratedColumn<Uint8List> logo = GeneratedColumn<Uint8List>(
+    'logo',
+    aliasedName,
+    true,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _builtinMeta = const VerificationMeta(
+    'builtin',
+  );
+  @override
+  late final GeneratedColumn<bool> builtin = GeneratedColumn<bool>(
+    'builtin',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("builtin" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<String> createdAt = GeneratedColumn<String>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    name,
+    kind,
+    hex,
+    logo,
+    builtin,
+    sortOrder,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'custom_brands';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<CustomBrand> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+        _nameMeta,
+        name.isAcceptableOrUnknown(data['name']!, _nameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nameMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+        _kindMeta,
+        kind.isAcceptableOrUnknown(data['kind']!, _kindMeta),
+      );
+    }
+    if (data.containsKey('hex')) {
+      context.handle(
+        _hexMeta,
+        hex.isAcceptableOrUnknown(data['hex']!, _hexMeta),
+      );
+    }
+    if (data.containsKey('logo')) {
+      context.handle(
+        _logoMeta,
+        logo.isAcceptableOrUnknown(data['logo']!, _logoMeta),
+      );
+    }
+    if (data.containsKey('builtin')) {
+      context.handle(
+        _builtinMeta,
+        builtin.isAcceptableOrUnknown(data['builtin']!, _builtinMeta),
+      );
+    }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  CustomBrand map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return CustomBrand(
+      id:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}id'],
+          )!,
+      name:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}name'],
+          )!,
+      kind:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}kind'],
+          )!,
+      hex:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}hex'],
+          )!,
+      logo: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}logo'],
+      ),
+      builtin:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.bool,
+            data['${effectivePrefix}builtin'],
+          )!,
+      sortOrder:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.int,
+            data['${effectivePrefix}sort_order'],
+          )!,
+      createdAt:
+          attachedDatabase.typeMapping.read(
+            DriftSqlType.string,
+            data['${effectivePrefix}created_at'],
+          )!,
+    );
+  }
+
+  @override
+  $CustomBrandsTable createAlias(String alias) {
+    return $CustomBrandsTable(attachedDatabase, alias);
+  }
+}
+
+class CustomBrand extends DataClass implements Insertable<CustomBrand> {
+  final String id;
+  final String name;
+  final String kind;
+  final String hex;
+  final Uint8List? logo;
+
+  /// 1 = hasil seed brand bawaan (untuk badge & backfill logo asset).
+  final bool builtin;
+
+  /// Urutan tampil (bawaan diberi nomor; custom 0 = urut nama).
+  final int sortOrder;
+  final String createdAt;
+  const CustomBrand({
+    required this.id,
+    required this.name,
+    required this.kind,
+    required this.hex,
+    this.logo,
+    required this.builtin,
+    required this.sortOrder,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['name'] = Variable<String>(name);
+    map['kind'] = Variable<String>(kind);
+    map['hex'] = Variable<String>(hex);
+    if (!nullToAbsent || logo != null) {
+      map['logo'] = Variable<Uint8List>(logo);
+    }
+    map['builtin'] = Variable<bool>(builtin);
+    map['sort_order'] = Variable<int>(sortOrder);
+    map['created_at'] = Variable<String>(createdAt);
+    return map;
+  }
+
+  CustomBrandsCompanion toCompanion(bool nullToAbsent) {
+    return CustomBrandsCompanion(
+      id: Value(id),
+      name: Value(name),
+      kind: Value(kind),
+      hex: Value(hex),
+      logo: logo == null && nullToAbsent ? const Value.absent() : Value(logo),
+      builtin: Value(builtin),
+      sortOrder: Value(sortOrder),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory CustomBrand.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return CustomBrand(
+      id: serializer.fromJson<String>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      kind: serializer.fromJson<String>(json['kind']),
+      hex: serializer.fromJson<String>(json['hex']),
+      logo: serializer.fromJson<Uint8List?>(json['logo']),
+      builtin: serializer.fromJson<bool>(json['builtin']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      createdAt: serializer.fromJson<String>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'name': serializer.toJson<String>(name),
+      'kind': serializer.toJson<String>(kind),
+      'hex': serializer.toJson<String>(hex),
+      'logo': serializer.toJson<Uint8List?>(logo),
+      'builtin': serializer.toJson<bool>(builtin),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'createdAt': serializer.toJson<String>(createdAt),
+    };
+  }
+
+  CustomBrand copyWith({
+    String? id,
+    String? name,
+    String? kind,
+    String? hex,
+    Value<Uint8List?> logo = const Value.absent(),
+    bool? builtin,
+    int? sortOrder,
+    String? createdAt,
+  }) => CustomBrand(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    kind: kind ?? this.kind,
+    hex: hex ?? this.hex,
+    logo: logo.present ? logo.value : this.logo,
+    builtin: builtin ?? this.builtin,
+    sortOrder: sortOrder ?? this.sortOrder,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  CustomBrand copyWithCompanion(CustomBrandsCompanion data) {
+    return CustomBrand(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      hex: data.hex.present ? data.hex.value : this.hex,
+      logo: data.logo.present ? data.logo.value : this.logo,
+      builtin: data.builtin.present ? data.builtin.value : this.builtin,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CustomBrand(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('kind: $kind, ')
+          ..write('hex: $hex, ')
+          ..write('logo: $logo, ')
+          ..write('builtin: $builtin, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    name,
+    kind,
+    hex,
+    $driftBlobEquality.hash(logo),
+    builtin,
+    sortOrder,
+    createdAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is CustomBrand &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.kind == this.kind &&
+          other.hex == this.hex &&
+          $driftBlobEquality.equals(other.logo, this.logo) &&
+          other.builtin == this.builtin &&
+          other.sortOrder == this.sortOrder &&
+          other.createdAt == this.createdAt);
+}
+
+class CustomBrandsCompanion extends UpdateCompanion<CustomBrand> {
+  final Value<String> id;
+  final Value<String> name;
+  final Value<String> kind;
+  final Value<String> hex;
+  final Value<Uint8List?> logo;
+  final Value<bool> builtin;
+  final Value<int> sortOrder;
+  final Value<String> createdAt;
+  final Value<int> rowid;
+  const CustomBrandsCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.hex = const Value.absent(),
+    this.logo = const Value.absent(),
+    this.builtin = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CustomBrandsCompanion.insert({
+    required String id,
+    required String name,
+    this.kind = const Value.absent(),
+    this.hex = const Value.absent(),
+    this.logo = const Value.absent(),
+    this.builtin = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    required String createdAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       name = Value(name),
+       createdAt = Value(createdAt);
+  static Insertable<CustomBrand> custom({
+    Expression<String>? id,
+    Expression<String>? name,
+    Expression<String>? kind,
+    Expression<String>? hex,
+    Expression<Uint8List>? logo,
+    Expression<bool>? builtin,
+    Expression<int>? sortOrder,
+    Expression<String>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (kind != null) 'kind': kind,
+      if (hex != null) 'hex': hex,
+      if (logo != null) 'logo': logo,
+      if (builtin != null) 'builtin': builtin,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CustomBrandsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? name,
+    Value<String>? kind,
+    Value<String>? hex,
+    Value<Uint8List?>? logo,
+    Value<bool>? builtin,
+    Value<int>? sortOrder,
+    Value<String>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return CustomBrandsCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      kind: kind ?? this.kind,
+      hex: hex ?? this.hex,
+      logo: logo ?? this.logo,
+      builtin: builtin ?? this.builtin,
+      sortOrder: sortOrder ?? this.sortOrder,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (hex.present) {
+      map['hex'] = Variable<String>(hex.value);
+    }
+    if (logo.present) {
+      map['logo'] = Variable<Uint8List>(logo.value);
+    }
+    if (builtin.present) {
+      map['builtin'] = Variable<bool>(builtin.value);
+    }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<String>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CustomBrandsCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('kind: $kind, ')
+          ..write('hex: $hex, ')
+          ..write('logo: $logo, ')
+          ..write('builtin: $builtin, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$MyDuitDatabase extends GeneratedDatabase {
   _$MyDuitDatabase(QueryExecutor e) : super(e);
   $MyDuitDatabaseManager get managers => $MyDuitDatabaseManager(this);
@@ -2621,6 +3130,7 @@ abstract class _$MyDuitDatabase extends GeneratedDatabase {
   late final $BillsTable bills = $BillsTable(this);
   late final $BillPaymentsTable billPayments = $BillPaymentsTable(this);
   late final $BudgetsTable budgets = $BudgetsTable(this);
+  late final $CustomBrandsTable customBrands = $CustomBrandsTable(this);
   late final Index idxTransactionsDate = Index(
     'idx_transactions_date',
     'CREATE INDEX idx_transactions_date ON transactions (date)',
@@ -2640,6 +3150,7 @@ abstract class _$MyDuitDatabase extends GeneratedDatabase {
     bills,
     billPayments,
     budgets,
+    customBrands,
     idxTransactionsDate,
     idxTransactionsAccount,
   ];
@@ -5449,6 +5960,271 @@ typedef $$BudgetsTableProcessedTableManager =
       Budget,
       PrefetchHooks Function({bool categoryId})
     >;
+typedef $$CustomBrandsTableCreateCompanionBuilder =
+    CustomBrandsCompanion Function({
+      required String id,
+      required String name,
+      Value<String> kind,
+      Value<String> hex,
+      Value<Uint8List?> logo,
+      Value<bool> builtin,
+      Value<int> sortOrder,
+      required String createdAt,
+      Value<int> rowid,
+    });
+typedef $$CustomBrandsTableUpdateCompanionBuilder =
+    CustomBrandsCompanion Function({
+      Value<String> id,
+      Value<String> name,
+      Value<String> kind,
+      Value<String> hex,
+      Value<Uint8List?> logo,
+      Value<bool> builtin,
+      Value<int> sortOrder,
+      Value<String> createdAt,
+      Value<int> rowid,
+    });
+
+class $$CustomBrandsTableFilterComposer
+    extends Composer<_$MyDuitDatabase, $CustomBrandsTable> {
+  $$CustomBrandsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get hex => $composableBuilder(
+    column: $table.hex,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get logo => $composableBuilder(
+    column: $table.logo,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get builtin => $composableBuilder(
+    column: $table.builtin,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$CustomBrandsTableOrderingComposer
+    extends Composer<_$MyDuitDatabase, $CustomBrandsTable> {
+  $$CustomBrandsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get name => $composableBuilder(
+    column: $table.name,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get hex => $composableBuilder(
+    column: $table.hex,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get logo => $composableBuilder(
+    column: $table.logo,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get builtin => $composableBuilder(
+    column: $table.builtin,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$CustomBrandsTableAnnotationComposer
+    extends Composer<_$MyDuitDatabase, $CustomBrandsTable> {
+  $$CustomBrandsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get hex =>
+      $composableBuilder(column: $table.hex, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get logo =>
+      $composableBuilder(column: $table.logo, builder: (column) => column);
+
+  GeneratedColumn<bool> get builtin =>
+      $composableBuilder(column: $table.builtin, builder: (column) => column);
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<String> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$CustomBrandsTableTableManager
+    extends
+        RootTableManager<
+          _$MyDuitDatabase,
+          $CustomBrandsTable,
+          CustomBrand,
+          $$CustomBrandsTableFilterComposer,
+          $$CustomBrandsTableOrderingComposer,
+          $$CustomBrandsTableAnnotationComposer,
+          $$CustomBrandsTableCreateCompanionBuilder,
+          $$CustomBrandsTableUpdateCompanionBuilder,
+          (
+            CustomBrand,
+            BaseReferences<_$MyDuitDatabase, $CustomBrandsTable, CustomBrand>,
+          ),
+          CustomBrand,
+          PrefetchHooks Function()
+        > {
+  $$CustomBrandsTableTableManager(_$MyDuitDatabase db, $CustomBrandsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer:
+              () => $$CustomBrandsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer:
+              () => $$CustomBrandsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer:
+              () =>
+                  $$CustomBrandsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> name = const Value.absent(),
+                Value<String> kind = const Value.absent(),
+                Value<String> hex = const Value.absent(),
+                Value<Uint8List?> logo = const Value.absent(),
+                Value<bool> builtin = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<String> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CustomBrandsCompanion(
+                id: id,
+                name: name,
+                kind: kind,
+                hex: hex,
+                logo: logo,
+                builtin: builtin,
+                sortOrder: sortOrder,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String name,
+                Value<String> kind = const Value.absent(),
+                Value<String> hex = const Value.absent(),
+                Value<Uint8List?> logo = const Value.absent(),
+                Value<bool> builtin = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                required String createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => CustomBrandsCompanion.insert(
+                id: id,
+                name: name,
+                kind: kind,
+                hex: hex,
+                logo: logo,
+                builtin: builtin,
+                sortOrder: sortOrder,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper:
+              (p0) =>
+                  p0
+                      .map(
+                        (e) => (
+                          e.readTable(table),
+                          BaseReferences(db, table, e),
+                        ),
+                      )
+                      .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$CustomBrandsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$MyDuitDatabase,
+      $CustomBrandsTable,
+      CustomBrand,
+      $$CustomBrandsTableFilterComposer,
+      $$CustomBrandsTableOrderingComposer,
+      $$CustomBrandsTableAnnotationComposer,
+      $$CustomBrandsTableCreateCompanionBuilder,
+      $$CustomBrandsTableUpdateCompanionBuilder,
+      (
+        CustomBrand,
+        BaseReferences<_$MyDuitDatabase, $CustomBrandsTable, CustomBrand>,
+      ),
+      CustomBrand,
+      PrefetchHooks Function()
+    >;
 
 class $MyDuitDatabaseManager {
   final _$MyDuitDatabase _db;
@@ -5465,4 +6241,6 @@ class $MyDuitDatabaseManager {
       $$BillPaymentsTableTableManager(_db, _db.billPayments);
   $$BudgetsTableTableManager get budgets =>
       $$BudgetsTableTableManager(_db, _db.budgets);
+  $$CustomBrandsTableTableManager get customBrands =>
+      $$CustomBrandsTableTableManager(_db, _db.customBrands);
 }

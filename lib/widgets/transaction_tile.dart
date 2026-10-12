@@ -117,7 +117,7 @@ class TransactionTile extends ConsumerWidget {
           context,
           'Hapus transaksi ini?',
           description:
-              'Transaksi dihapus permanen dan saldo wallet dihitung ulang.',
+              'Transaksi dihapus permanen dan saldo dompet dihitung ulang.',
         );
         if (!confirmed || !context.mounted) return;
         final db = ref.read(dbProvider);

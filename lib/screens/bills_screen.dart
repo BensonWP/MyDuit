@@ -29,7 +29,7 @@ Future<void> confirmAndPayBill(
     builder: (ctx) => AlertDialog(
       title: Text('Bayar ${bill.name}?'),
       content: Text(
-          '${formatRupiah(bill.amount)} akan dicatat dari wallet $accountName.'),
+          '${formatRupiah(bill.amount)} akan dicatat dari dompet $accountName.'),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -482,7 +482,7 @@ class _BillSheetState extends ConsumerState<_BillSheet> {
     if (!_formKey.currentState!.validate()) return;
     if (_accountId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Pilih wallet')),
+        const SnackBar(content: Text('Pilih dompet')),
       );
       return;
     }
@@ -558,7 +558,7 @@ class _BillSheetState extends ConsumerState<_BillSheet> {
   @override
   Widget build(BuildContext context) {
     final accounts = ref.watch(accountsStreamProvider).valueOrNull ?? [];
-    final categories = ref.watch(categoriesStreamProvider).valueOrNull ?? [];
+    final categories = ref.watch(activeCategoriesProvider).valueOrNull ?? [];
     final expenseCategories =
         categories.where((c) => c.type == 'expense').toList();
 
@@ -611,7 +611,7 @@ class _BillSheetState extends ConsumerState<_BillSheet> {
                 value: accounts.any((a) => a.id == _accountId)
                     ? _accountId
                     : null,
-                decoration: const InputDecoration(labelText: 'Wallet'),
+                decoration: const InputDecoration(labelText: 'Dompet'),
                 items: accounts
                     .map((a) => DropdownMenuItem(value: a.id, child: Text(a.name)))
                     .toList(),

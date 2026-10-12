@@ -29,8 +29,8 @@ APK tersedia di `build/app/outputs/flutter-apk/app-release.apk`.
 ## Pengembangan
 
 ```bash
-flutter test        # 31 test (unit + widget)
+flutter test        # unit + widget (lihat test/)
 flutter analyze
 ```
 
-Migrasi skema database via Drift `schemaVersion` (saat ini v6) — tabel lama tidak pernah di-drop, hanya kolom/tabel baru.
+Migrasi skema database via Drift `schemaVersion` (saat ini v11) — tabel lama tidak pernah di-drop, hanya kolom/tabel baru.

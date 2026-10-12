@@ -14,7 +14,7 @@ class Accounts extends Table {
   TextColumn get type => text().withDefault(const Constant('cash'))();
   TextColumn get color => text().withDefault(const Constant('#4CAF50'))();
 
-  /// Brand e-wallet: 'gopay'|'ovo'|'dana'|'shopeepay'|'linkaja'.
+  /// Brand e-wallet: 'gopay'|'ovo'|'dana'|'shopeepay' (sisanya via Kelola Brand).
   /// Null untuk tipe lain / wallet lama → tampil ikon generik.
   TextColumn get brand => text().nullable()();
   IntColumn get initialBalance => integer().withDefault(const Constant(0))();
@@ -97,6 +97,29 @@ class Budgets extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// Master brand wallet — SEMUA brand (bawaan & custom) ada di sini.
+/// Bawaan di-seed sekali saat migrasi v11 ([builtin] = 1, logo null lalu
+/// di-backfill dari asset di layer app) sehingga bisa diedit/dihapus seperti
+/// custom. Logo opsional disimpan blob PNG 192px (bukan file lepas) agar
+/// backup/restore file-level tetap utuh otomatis.
+class CustomBrands extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get kind => text().withDefault(const Constant('bank'))();
+  TextColumn get hex => text().withDefault(const Constant('#607D8B'))();
+  BlobColumn get logo => blob().nullable()();
+
+  /// 1 = hasil seed brand bawaan (untuk badge & backfill logo asset).
+  BoolColumn get builtin => boolean().withDefault(const Constant(false))();
+
+  /// Urutan tampil (bawaan diberi nomor; custom 0 = urut nama).
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+  TextColumn get createdAt => text()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 /// Baris hasil watchActiveBillsDetailed — bukan tabel, hanya DTO query.
 /// Tagihan aktif + status bayar dari SATU query: daftar tagihan dan
 /// proyeksi tak bisa lagi melihat data beda frame.
@@ -111,6 +134,16 @@ class ActiveBillRow {
   final int paidMonths; // jumlah bulan berbeda yang sudah dibayar
   final bool paidThisMonth;
 }
+
+/// Baris hasil watchBudgets — anggaran + info kategori (DTO query).
+typedef BudgetInfo = ({
+  String id,
+  String categoryId,
+  String name,
+  String icon,
+  String type,
+  int monthlyAmount,
+});
 
 /// Snapshot untuk urungkan hapus transaksi (lihat captureTransactionUndo).
 typedef TransactionUndo = ({
@@ -148,7 +181,8 @@ class InsufficientBalanceException implements Exception {
   Transactions,
   Bills,
   BillPayments,
-  Budgets
+  Budgets,
+  CustomBrands
 ])
 class MyDuitDatabase extends _$MyDuitDatabase {
   MyDuitDatabase() : super(_openConnection());
@@ -157,7 +191,7 @@ class MyDuitDatabase extends _$MyDuitDatabase {
 
   /// Versi skema saat ini — juga dibaca BackupService untuk menolak
   /// backup dari app yang lebih baru (lihat validateBackupFile).
-  static const int currentSchemaVersion = 8;
+  static const int currentSchemaVersion = 11;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -167,6 +201,7 @@ class MyDuitDatabase extends _$MyDuitDatabase {
         onCreate: (m) async {
           await m.createAll();
           await _seedCategories();
+          await seedBuiltinBrands();
         },
         onUpgrade: (m, from, to) async {
           if (from == 1) {
@@ -192,6 +227,35 @@ class MyDuitDatabase extends _$MyDuitDatabase {
           if (from < 8) {
             await customStatement('DROP TABLE IF EXISTS plans');
           }
+          // v9: master brand wallet buatan user.
+          if (from < 9) {
+            await m.createTable(customBrands);
+          }
+          // v10: kategori pemasukan diperbaiki. Install baru sebelumnya
+          // men-seed semuanya sebagai expense (cat_salary/cat_sidejob
+          // salah tipe, daftar income kosong) — perbaiki di sini agar
+          // DB lama ikut sembuh, plus fallback income untuk form.
+          if (from < 10) {
+            await customStatement(
+              "UPDATE categories SET type = 'income' WHERE id IN ('cat_salary', 'cat_sidejob')",
+            );
+            await customStatement(
+              "INSERT OR IGNORE INTO categories(id, name, type, icon, archived) VALUES ('cat_other_income', 'Lainnya', 'income', 'more_horiz', 0)",
+            );
+            // Transaksi income yang terlanjur menunjuk fallback expense
+            // (lihat TransactionForm sebelum v10) dipindah ke fallback income.
+            await customStatement(
+              "UPDATE transactions SET category_id = 'cat_other_income' WHERE type = 'income' AND category_id = 'cat_other'",
+            );
+          }
+          // v11: Kelola Brand jadi master data penuh — semua brand (bawaan
+          // & custom) pindah ke DB, plus jenis 'card'. Logo bawaan
+          // di-backfill dari asset di layer app (DB tak bisa rootBundle).
+          if (from < 11) {
+            await m.addColumn(customBrands, customBrands.builtin);
+            await m.addColumn(customBrands, customBrands.sortOrder);
+            await seedBuiltinBrands();
+          }
         },
         beforeOpen: (details) async {
           await customStatement('PRAGMA foreign_keys = ON');
@@ -200,16 +264,17 @@ class MyDuitDatabase extends _$MyDuitDatabase {
 
   Future<void> _seedCategories() async {
     final presets = [
-      (id: 'cat_food', name: 'Makanan', icon: 'restaurant'),
-      (id: 'cat_transport', name: 'Transportasi', icon: 'directions_car'),
-      (id: 'cat_bills', name: 'Tagihan', icon: 'receipt'),
-      (id: 'cat_shopping', name: 'Belanja', icon: 'shopping_bag'),
-      (id: 'cat_health', name: 'Kesehatan', icon: 'local_hospital'),
-      (id: 'cat_education', name: 'Pendidikan', icon: 'school'),
-      (id: 'cat_entertainment', name: 'Hiburan', icon: 'movie'),
-      (id: 'cat_salary', name: 'Gaji', icon: 'work'),
-      (id: 'cat_sidejob', name: 'Pekerjaan Sampingan', icon: 'laptop'),
-      (id: 'cat_other', name: 'Lainnya', icon: 'more_horiz'),
+      (id: 'cat_food', name: 'Makanan', type: 'expense', icon: 'restaurant'),
+      (id: 'cat_transport', name: 'Transportasi', type: 'expense', icon: 'directions_car'),
+      (id: 'cat_bills', name: 'Tagihan', type: 'expense', icon: 'receipt'),
+      (id: 'cat_shopping', name: 'Belanja', type: 'expense', icon: 'shopping_bag'),
+      (id: 'cat_health', name: 'Kesehatan', type: 'expense', icon: 'local_hospital'),
+      (id: 'cat_education', name: 'Pendidikan', type: 'expense', icon: 'school'),
+      (id: 'cat_entertainment', name: 'Hiburan', type: 'expense', icon: 'movie'),
+      (id: 'cat_salary', name: 'Gaji', type: 'income', icon: 'work'),
+      (id: 'cat_sidejob', name: 'Pekerjaan Sampingan', type: 'income', icon: 'laptop'),
+      (id: 'cat_other', name: 'Lainnya', type: 'expense', icon: 'more_horiz'),
+      (id: 'cat_other_income', name: 'Lainnya', type: 'income', icon: 'more_horiz'),
     ];
     await batch((b) {
       b.insertAll(
@@ -218,7 +283,7 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             .map((c) => CategoriesCompanion.insert(
                   id: c.id,
                   name: c.name,
-                  type: const Value('expense'),
+                  type: Value(c.type),
                   icon: Value(c.icon),
                 ))
             .toList(),
@@ -239,6 +304,136 @@ class MyDuitDatabase extends _$MyDuitDatabase {
   Future<void> insertAccount(AccountsCompanion entry) => into(accounts).insert(entry);
 
   Future<void> updateAccount(AccountsCompanion entry) => into(accounts).insertOnConflictUpdate(entry);
+
+  /// Arsipkan wallet (soft delete): transaksi/tagihan tetap utuh, tapi
+  /// wallet hilang dari daftar & total saldo. Reversibel — arsip adalah
+  /// "undo" bawaan, jadi hapus-arsip tak perlu konfirmasi berat.
+  Future<void> archiveAccount(String id) async {
+    await (update(accounts)..where((a) => a.id.equals(id)))
+        .write(const AccountsCompanion(archived: Value(true)));
+  }
+
+  Future<void> unarchiveAccount(String id) async {
+    await (update(accounts)..where((a) => a.id.equals(id)))
+        .write(const AccountsCompanion(archived: Value(false)));
+  }
+
+  /// Wallet arsip — untuk seksi Diarsipkan. Saldo terakhir tetap bisa
+  /// dihitung via [accountBalance] (fitur untuk baris arsip, bukan bug).
+  Stream<List<Account>> watchArchivedAccounts() =>
+      (select(accounts)..where((a) => a.archived.equals(true))..orderBy([(a) => OrderingTerm.asc(a.name)])).watch();
+
+  // ─── Brand queries (master: bawaan + custom) ──────────────────
+
+  /// SEMUA brand (bawaan di-seed saat migrasi + tambahan user), urut
+  /// sortOrder lalu nama.
+  Stream<List<CustomBrand>> watchCustomBrands() => (select(customBrands)
+        ..orderBy([
+          (b) => OrderingTerm.asc(b.sortOrder),
+          (b) => OrderingTerm.asc(b.name),
+        ]))
+      .watch();
+
+  Stream<List<CustomBrand>> watchBrandsByKind(String kind) =>
+      (select(customBrands)
+            ..where((b) => b.kind.equals(kind))
+            ..orderBy([
+              (b) => OrderingTerm.asc(b.sortOrder),
+              (b) => OrderingTerm.asc(b.name),
+            ]))
+          .watch();
+
+  Future<void> insertBrand(CustomBrandsCompanion entry) =>
+      into(customBrands).insert(entry);
+
+  /// Update parsial via UPDATE…WHERE (bukan insertOnConflictUpdate yang
+  /// menuntut kolom wajib seperti createdAt ikut dikirim).
+  Future<void> updateBrand(CustomBrandsCompanion entry) =>
+      (update(customBrands)..where((b) => b.id.equals(entry.id.value)))
+          .write(entry);
+
+  /// Set logo blob brand (dipakai backfill logo bawaan dari asset).
+  Future<void> setBrandLogo(String id, Uint8List logo) =>
+      (update(customBrands)..where((b) => b.id.equals(id)))
+          .write(CustomBrandsCompanion(logo: Value(logo)));
+
+  /// Seed brand bawaan "top" saja (4 e-wallet + 4 bank + 5 kartu; id lama
+  /// dipertahankan agar wallet lama tetap cocok). Brand lain ditambah user
+  /// via Kelola Brand. INSERT OR IGNORE → brand custom user (dan brand
+  /// bawaan lama yang masih ada di DB pengguna lawas) tak tertimpa saat
+  /// upgrade/restore. Logo diisi belakangan (backfill asset).
+  Future<void> seedBuiltinBrands() async {
+    final rows = [
+      // ── E-Wallet ──
+      ('gopay', 'GoPay', 'ewallet', '#00AED6'),
+      ('ovo', 'OVO', 'ewallet', '#4C3494'),
+      ('dana', 'DANA', 'ewallet', '#118EEA'),
+      ('shopeepay', 'ShopeePay', 'ewallet', '#EE4D2D'),
+      // ── Bank ──
+      ('bca', 'BCA', 'bank', '#0060AF'),
+      ('bri', 'BRI', 'bank', '#00529C'),
+      ('mandiri', 'Mandiri', 'bank', '#0B3B8C'),
+      ('bni', 'BNI', 'bank', '#F26F21'),
+      // ── Kartu ──
+      ('visa', 'Visa', 'card', '#1A1F71'),
+      ('mastercard', 'Mastercard', 'card', '#EB001B'),
+      ('jcb', 'JCB', 'card', '#0E4C92'),
+      ('gpn', 'GPN', 'card', '#E4002B'),
+      ('amex', 'Amex', 'card', '#006FCF'),
+    ];
+    final now = DateTime.now().toIso8601String();
+    await batch((b) {
+      for (var i = 0; i < rows.length; i++) {
+        final (id, name, kind, hex) = rows[i];
+        b.insert(
+          customBrands,
+          CustomBrandsCompanion.insert(
+            id: id,
+            name: name,
+            kind: Value(kind),
+            hex: Value(hex),
+            builtin: const Value(true),
+            sortOrder: Value(i),
+            createdAt: now,
+          ),
+          mode: InsertMode.insertOrIgnore,
+        );
+      }
+    });
+  }
+
+  /// Hapus brand. Ditolak bila masih dipakai wallet — pindahkan atau hapus
+  /// wallet-nya dulu (cek [brandUsage]).
+  Future<void> deleteBrand(String id) async {
+    if (await brandUsage(id) > 0) {
+      throw ArgumentError('Brand masih dipakai dompet');
+    }
+    await (delete(customBrands)..where((b) => b.id.equals(id))).go();
+  }
+
+  /// Jumlah wallet yang memakai brand ini.
+  Future<int> brandUsage(String brandId) async {
+    final row = await customSelect(
+      'SELECT COUNT(*) AS c FROM accounts WHERE brand = ?1',
+      variables: [Variable.withString(brandId)],
+      readsFrom: {accounts},
+    ).getSingle();
+    return row.data['c'] as int;
+  }
+
+  /// Wallet pemakai brand + saldo saat ini — untuk dialog peringatan hapus.
+  Future<List<(Account account, int balance)>> brandWallets(
+      String brandId) async {
+    final accs = await (select(accounts)
+          ..where((a) => a.brand.equals(brandId))
+          ..orderBy([(a) => OrderingTerm.asc(a.name)]))
+        .get();
+    final out = <(Account, int)>[];
+    for (final a in accs) {
+      out.add((a, await accountBalance(a.id)));
+    }
+    return out;
+  }
 
   /// Ringkasan pemakaian wallet — untuk dialog konfirmasi hapus.
   Future<(int txCount, int billCount)> accountUsage(String accountId) async {
@@ -277,11 +472,79 @@ class MyDuitDatabase extends _$MyDuitDatabase {
     });
   }
 
+  /// Hapus SEMUA data user (transaksi, tagihan, wallet, budget, brand
+  /// custom) lalu seed ulang kategori & brand bawaan. Dipakai fitur
+  /// "Hapus semua data" di Profil.
+  ///
+  /// Urutan hapus anak→induk wajib: FK aktif tanpa ON DELETE cascade.
+  /// Kategori dihapus total lalu di-seed ulang (insertAll tidak
+  /// idempoten — PK conflict bila dijalankan dua kali pada baris ada).
+  Future<void> wipeAllData() async {
+    await transaction(() async {
+      await customStatement('DELETE FROM bill_payments');
+      await customStatement('DELETE FROM budgets');
+      await customStatement('DELETE FROM transactions');
+      await customStatement('DELETE FROM bills');
+      await customStatement('DELETE FROM accounts');
+      await customStatement('DELETE FROM categories');
+      await customStatement('DELETE FROM custom_brands');
+      await _seedCategories();
+      await seedBuiltinBrands();
+    });
+  }
+
   // ─── Category queries ─────────────────────────────────────────
 
   Future<List<Category>> allCategories() => select(categories).get();
 
   Stream<List<Category>> watchAllCategories() => select(categories).watch();
+
+  /// Kategori aktif (tidak diarsip) untuk picker form — urut nama.
+  Stream<List<Category>> watchActiveCategories() =>
+      (select(categories)
+            ..where((c) => c.archived.equals(false))
+            ..orderBy([(c) => OrderingTerm.asc(c.name)]))
+          .watch();
+
+  Future<void> insertCategory(CategoriesCompanion entry) =>
+      into(categories).insert(entry);
+
+  Future<void> updateCategory(CategoriesCompanion entry) =>
+      into(categories).insertOnConflictUpdate(entry);
+
+  /// Arsipkan kategori (soft delete): transaksi/tagihan yang sudah
+  /// memakai kategori ini tetap utuh. `cat_other`/`cat_other_income`
+  /// adalah fallback form transaksi — menolak diarsipkan.
+  Future<void> archiveCategory(String id) async {
+    if (id == 'cat_other' || id == 'cat_other_income') {
+      throw ArgumentError('Kategori "Lainnya" tidak bisa diarsipkan');
+    }
+    await (update(categories)..where((c) => c.id.equals(id)))
+        .write(const CategoriesCompanion(archived: Value(true)));
+  }
+
+  Future<void> unarchiveCategory(String id) async {
+    await (update(categories)..where((c) => c.id.equals(id)))
+        .write(const CategoriesCompanion(archived: Value(false)));
+  }
+
+  /// Ringkasan pemakaian kategori — untuk dialog konfirmasi arsip.
+  Future<(int txCount, int billCount)> categoryUsage(String categoryId) async {
+    final txRow = await customSelect(
+      'SELECT COUNT(*) AS c FROM transactions WHERE category_id = ?1',
+      variables: [Variable.withString(categoryId)],
+      readsFrom: {transactions},
+    ).getSingle();
+    final billRow = await customSelect(
+      'SELECT COUNT(*) AS c FROM bills WHERE category_id = ?1',
+      variables: [Variable.withString(categoryId)],
+      readsFrom: {bills},
+    ).getSingle();
+    return (
+      txRow.data['c'] as int,
+      billRow.data['c'] as int,
+    );
+  }
 
   // ─── Transaction queries ───────────────────────────────────────
 
@@ -678,6 +941,58 @@ class MyDuitDatabase extends _$MyDuitDatabase {
             ..where((bp) => bp.billId.equals(billId))
             ..orderBy([(bp) => OrderingTerm.desc(bp.paidAt)]))
           .watch();
+
+  // ─── Budget queries ──────────────────────────────────────────
+
+  /// Anggaran aktif + info kategorinya (join). Anggaran milik kategori
+  /// arsip disembunyikan dan muncul lagi bila kategorinya diaktifkan
+  /// kembali — tanpa baris yatim.
+  Stream<List<BudgetInfo>> watchBudgets() {
+    final query = select(budgets).join([
+      innerJoin(categories, categories.id.equalsExp(budgets.categoryId)),
+    ]);
+    return query.watch().map((rows) => rows
+        .where((r) => !r.readTable(categories).archived)
+        .map((r) => (
+              id: r.readTable(budgets).id,
+              categoryId: r.readTable(budgets).categoryId,
+              name: r.readTable(categories).name,
+              icon: r.readTable(categories).icon,
+              type: r.readTable(categories).type,
+              monthlyAmount: r.readTable(budgets).monthlyAmount,
+            ))
+        .toList());
+  }
+
+  /// Set/ubah anggaran kategori. Jumlah ≤ 0 = hapus barisnya.
+  /// Hanya kategori expense yang bisa dianggarkan.
+  Future<void> setBudget(String categoryId, int amount) async {
+    final cat = await (select(categories)
+          ..where((c) => c.id.equals(categoryId)))
+        .getSingleOrNull();
+    if (cat == null) {
+      throw ArgumentError('Kategori tidak ditemukan');
+    }
+    if (cat.type != 'expense') {
+      throw ArgumentError('Hanya kategori pengeluaran yang bisa dianggarkan');
+    }
+    final existing = await (select(budgets)
+          ..where((b) => b.categoryId.equals(categoryId)))
+        .getSingleOrNull();
+    if (existing == null) {
+      if (amount <= 0) return;
+      await into(budgets).insert(BudgetsCompanion.insert(
+        id: const Uuid().v4(),
+        categoryId: categoryId,
+        monthlyAmount: amount,
+      ));
+    } else if (amount <= 0) {
+      await (delete(budgets)..where((b) => b.id.equals(existing.id))).go();
+    } else {
+      await (update(budgets)..where((b) => b.id.equals(existing.id)))
+          .write(BudgetsCompanion(monthlyAmount: Value(amount)));
+    }
+  }
 }
 
 LazyDatabase _openConnection() {

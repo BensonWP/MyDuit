@@ -172,13 +172,13 @@ class HistoryTabState extends ConsumerState<HistoryTab> {
                 initialValue: _accountId,
                 onSelected: (v) => setState(() => _accountId = v),
                 itemBuilder: (_) => [
-                  const PopupMenuItem(value: null, child: Text('Semua Wallet')),
+                  const PopupMenuItem(value: null, child: Text('Semua Dompet')),
                   ...accounts.map((a) =>
                       PopupMenuItem(value: a.id, child: Text(a.name))),
                 ],
                 child: _FilterPill(
                   icon: Icons.account_balance_wallet_rounded,
-                  label: selectedAccount?.name ?? 'Semua Wallet',
+                  label: selectedAccount?.name ?? 'Semua Dompet',
                   active: _accountId != null,
                 ),
               ),
