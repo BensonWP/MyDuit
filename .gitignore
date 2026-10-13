@@ -47,6 +47,9 @@ app.*.map.json
 # Release artifacts (didistribusikan via Google Drive, bukan via git)
 /dist/
 
+# Folder staging media (poster dkk, tidak ikut commit)
+/_media/
+
 # Android signing & secrets (jangan pernah commit)
 *.jks
 *.keystore
