@@ -1,6 +1,8 @@
 # MyDuit
 
-![Poster MyDuit](docs/poster.png)
+<p align="center">
+  <img src="docs/poster.png" width="400" alt="Poster MyDuit">
+</p>
 
 Aplikasi pencatat keuangan pribadi, lokal-first: semua data tersimpan di perangkat (SQLite), tanpa akun, tanpa server.
 
