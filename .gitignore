@@ -43,3 +43,15 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Release artifacts (didistribusikan via Google Drive, bukan via git)
+/dist/
+
+# Android signing & secrets (jangan pernah commit)
+*.jks
+*.keystore
+key.properties
+local.properties
+.env
+google-services.json
+GoogleService-Info.plist
